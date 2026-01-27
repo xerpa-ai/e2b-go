@@ -161,9 +161,13 @@ func (c *httpClient) doStreamRequest(
 
 		var sr streamResponse
 		if err := json.Unmarshal([]byte(line), &sr); err != nil {
-			// Skip malformed lines
+			// Log malformed lines for debugging
+			// fmt.Printf("[debug] malformed line: %s\n", line)
 			continue
 		}
+
+		// Debug: uncomment to log received events
+		// fmt.Printf("[debug] received line: %s\n", line)
 
 		if err := handler(&sr); err != nil {
 			return resp.StatusCode, err

@@ -1,9 +1,11 @@
 package e2b
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -24,12 +26,39 @@ type Sandbox struct {
 	// ID is the unique identifier for this sandbox.
 	ID string
 
+	// Domain is the base domain for sandbox traffic.
+	Domain string
+
 	mu             sync.RWMutex
 	config         *sandboxConfig
 	httpClient     *httpClient
 	closed         bool
 	accessToken    string
 	trafficToken   string
+}
+
+// E2B API base URL
+const e2bAPIBaseURL = "https://api.e2b.app"
+
+// sandboxCreateRequest represents the request body for creating a sandbox.
+type sandboxCreateRequest struct {
+	TemplateID          string            `json:"templateID"`
+	Timeout             int               `json:"timeout,omitempty"`
+	Metadata            map[string]string `json:"metadata,omitempty"`
+	EnvVars             map[string]string `json:"envVars,omitempty"`
+	Secure              bool              `json:"secure"`
+	AllowInternetAccess bool              `json:"allow_internet_access"`
+}
+
+// sandboxCreateResponse represents the response from creating a sandbox.
+type sandboxCreateResponse struct {
+	SandboxID          string `json:"sandboxID"`
+	TemplateID         string `json:"templateID"`
+	ClientID           string `json:"clientID"`
+	EnvdVersion        string `json:"envdVersion"`
+	EnvdAccessToken    string `json:"envdAccessToken"`
+	TrafficAccessToken string `json:"trafficAccessToken"`
+	Domain             string `json:"domain"`
 }
 
 // New creates a new Sandbox instance.
@@ -67,16 +96,112 @@ func New(opts ...Option) (*Sandbox, error) {
 		}
 	}
 
-	// TODO: In a full implementation, this would call the E2B API to create
-	// a new sandbox instance and get the sandbox ID, access tokens, etc.
-	// For now, we'll set up the structure assuming the sandbox already exists.
+	// Create sandbox via E2B API
+	createReq := &sandboxCreateRequest{
+		TemplateID:          cfg.template,
+		Timeout:             int(cfg.timeout.Seconds()),
+		Metadata:            cfg.metadata,
+		EnvVars:             cfg.envVars,
+		Secure:              false, // Match Python SDK test configuration
+		AllowInternetAccess: true,  // Allow internet access by default
+	}
+
+	createResp, err := createSandbox(cfg.httpClient, cfg.apiKey, createReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sandbox: %w", err)
+	}
+
+	// Use the domain from API response, or fallback to e2b.dev
+	domain := createResp.Domain
+	if domain == "" {
+		domain = "e2b.dev"
+	}
 
 	sandbox := &Sandbox{
-		ID:     "", // Will be set after API call
-		config: cfg,
+		ID:           createResp.SandboxID,
+		Domain:       domain,
+		config:       cfg,
+		accessToken:  createResp.EnvdAccessToken,
+		trafficToken: createResp.TrafficAccessToken,
+	}
+
+	// Initialize the HTTP client for Jupyter API calls
+	sandbox.initHTTPClient()
+
+	// Wait for the Jupyter server to be ready
+	if err := sandbox.waitForReady(); err != nil {
+		// Clean up if the sandbox fails to become ready
+		sandbox.Close()
+		return nil, fmt.Errorf("sandbox not ready: %w", err)
 	}
 
 	return sandbox, nil
+}
+
+// waitForReady waits for the sandbox's Jupyter server to be ready.
+func (s *Sandbox) waitForReady() error {
+	maxRetries := 30
+	retryInterval := 1 * time.Second
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		// Try to list contexts - this is a lightweight operation that
+		// will succeed when the Jupyter server is ready
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := s.ListContexts(ctx)
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		// If the error indicates the port is not ready, wait and retry
+		if i < maxRetries-1 {
+			time.Sleep(retryInterval)
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for Jupyter server (sandbox=%s, domain=%s, url=%s): %v",
+		s.ID, s.Domain, s.GetHost(JupyterPort), lastErr)
+}
+
+// createSandbox calls the E2B API to create a new sandbox.
+func createSandbox(client *http.Client, apiKey string, req *sandboxCreateRequest) (*sandboxCreateResponse, error) {
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, e2bAPIBaseURL+"/sandboxes", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-API-Key", apiKey)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var createResp sandboxCreateResponse
+	if err := json.Unmarshal(respBody, &createResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &createResp, nil
 }
 
 // Connect connects to an existing sandbox by ID.
@@ -133,9 +258,8 @@ func (s *Sandbox) initHTTPClient() {
 		scheme = "http"
 	}
 
-	// The host would typically come from the E2B API response
-	// Format: {sandboxID}.e2b.dev or similar
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, s.getHost(), JupyterPort)
+	// E2B URL format: https://{port}-{sandboxID}.{domain}
+	baseURL := fmt.Sprintf("%s://%s", scheme, s.GetHost(JupyterPort))
 
 	s.httpClient = newHTTPClient(
 		s.config.httpClient,
@@ -145,12 +269,13 @@ func (s *Sandbox) initHTTPClient() {
 	)
 }
 
-// getHost returns the sandbox host.
-// In production, this would return the actual sandbox hostname.
-func (s *Sandbox) getHost() string {
-	// This would typically be something like:
-	// return fmt.Sprintf("%s.e2b.dev", s.ID)
-	return fmt.Sprintf("%s.e2b.dev", s.ID)
+// GetHost returns the sandbox host for a given port.
+// The E2B URL format is: {port}-{sandboxID}.{domain}
+func (s *Sandbox) GetHost(port int) string {
+	if s.config.debug {
+		return fmt.Sprintf("localhost:%d", port)
+	}
+	return fmt.Sprintf("%d-%s.%s", port, s.ID, s.Domain)
 }
 
 // RunCode executes code in the sandbox.
@@ -428,8 +553,38 @@ func (s *Sandbox) Close() error {
 
 	s.closed = true
 
-	// TODO: In a full implementation, this would call the E2B API to
-	// terminate the sandbox instance.
+	// Kill the sandbox via E2B API
+	if s.ID != "" && s.config != nil && s.config.apiKey != "" {
+		_ = killSandbox(s.config.httpClient, s.config.apiKey, s.ID)
+	}
+
+	return nil
+}
+
+// killSandbox calls the E2B API to terminate a sandbox.
+func killSandbox(client *http.Client, apiKey, sandboxID string) error {
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, e2bAPIBaseURL+"/sandboxes/"+sandboxID, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-API-Key", apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 204 No Content is success, 404 means already killed
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
 
 	return nil
 }

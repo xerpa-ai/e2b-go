@@ -11,6 +11,7 @@ A Go SDK for the [E2B](https://e2b.dev) Code Interpreter - secure cloud sandboxe
 - Support for multiple programming languages (Python, JavaScript, TypeScript, R, Java, Bash)
 - Streaming output with real-time callbacks
 - Isolated execution contexts with persistent state
+- **Full filesystem operations** (read, write, list, mkdir, remove, rename, watch)
 - Chart data extraction from matplotlib and other plotting libraries
 - Functional options pattern for idiomatic Go configuration
 
@@ -201,6 +202,124 @@ Supported chart types:
 - `BoxAndWhiskerChart`
 - `SuperChart` (contains multiple sub-charts)
 
+## Filesystem Operations
+
+The SDK provides full filesystem access to the sandbox via the `Files` field:
+
+### Read and Write Files
+
+```go
+// Write a file
+info, err := sandbox.Files.Write(ctx, "/home/user/hello.txt", "Hello, World!")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Wrote file: %s\n", info.Path)
+
+// Read a file
+content, err := sandbox.Files.Read(ctx, "/home/user/hello.txt")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(content) // Output: Hello, World!
+
+// Read as bytes
+data, err := sandbox.Files.ReadBytes(ctx, "/home/user/binary.bin")
+
+// Write multiple files at once
+infos, err := sandbox.Files.WriteFiles(ctx, []e2b.WriteEntry{
+    {Path: "/home/user/file1.txt", Data: "Content 1"},
+    {Path: "/home/user/file2.txt", Data: "Content 2"},
+})
+```
+
+### Directory Operations
+
+```go
+// Create a directory (creates parent directories if needed)
+created, err := sandbox.Files.MakeDir(ctx, "/home/user/mydir/subdir")
+if created {
+    fmt.Println("Directory created")
+}
+
+// List directory contents
+entries, err := sandbox.Files.List(ctx, "/home/user")
+for _, entry := range entries {
+    fmt.Printf("%s (%s, %d bytes)\n", entry.Name, entry.Type, entry.Size)
+}
+
+// List with depth
+entries, err := sandbox.Files.List(ctx, "/home/user", e2b.WithDepth(3))
+```
+
+### File Information
+
+```go
+// Check if file exists
+exists, err := sandbox.Files.Exists(ctx, "/home/user/file.txt")
+if exists {
+    fmt.Println("File exists")
+}
+
+// Get file information
+info, err := sandbox.Files.GetInfo(ctx, "/home/user/file.txt")
+fmt.Printf("Name: %s\n", info.Name)
+fmt.Printf("Type: %s\n", info.Type)           // "file" or "dir"
+fmt.Printf("Size: %d bytes\n", info.Size)
+fmt.Printf("Permissions: %s\n", info.Permissions) // e.g., "rw-r--r--"
+fmt.Printf("Owner: %s\n", info.Owner)
+fmt.Printf("Modified: %v\n", info.ModifiedTime)
+```
+
+### Rename and Remove
+
+```go
+// Rename/move a file
+info, err := sandbox.Files.Rename(ctx, "/home/user/old.txt", "/home/user/new.txt")
+
+// Remove a file or directory
+err := sandbox.Files.Remove(ctx, "/home/user/file.txt")
+```
+
+### Watch Directory for Changes
+
+```go
+// Watch a directory for changes
+handle, err := sandbox.Files.WatchDir(ctx, "/home/user", 
+    func(event e2b.FilesystemEvent) {
+        fmt.Printf("Event: %s on %s\n", event.Type, event.Name)
+    },
+    e2b.WithRecursive(true), // Watch subdirectories too
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer handle.Stop()
+
+// Event types: create, write, remove, rename, chmod
+
+// Alternative: Non-streaming watcher (poll-based)
+watcherID, err := sandbox.Files.CreateWatcher(ctx, "/home/user")
+defer sandbox.Files.RemoveWatcher(ctx, watcherID)
+
+// Poll for events
+events, err := sandbox.Files.GetWatcherEvents(ctx, watcherID)
+for _, event := range events {
+    fmt.Printf("%s: %s\n", event.Type, event.Name)
+}
+```
+
+### Filesystem Options
+
+```go
+// Set user for operations (affects path resolution and ownership)
+content, err := sandbox.Files.Read(ctx, "file.txt", e2b.WithReadUser("root"))
+
+// Set request timeout
+info, err := sandbox.Files.Write(ctx, "/path", data,
+    e2b.WithWriteRequestTimeout(30*time.Second))
+```
+
 ## Error Handling
 
 ### Go Errors
@@ -291,6 +410,25 @@ for _, result := range execution.Results {
 | `RestartContext(ctx, contextID)` | Restart a context |
 | `Close()` | Close the sandbox |
 
+### Filesystem Methods (sandbox.Files)
+
+| Method | Description |
+|--------|-------------|
+| `Read(ctx, path, opts...)` | Read file content as string |
+| `ReadBytes(ctx, path, opts...)` | Read file content as bytes |
+| `Write(ctx, path, data, opts...)` | Write content to a file |
+| `WriteFiles(ctx, files, opts...)` | Write multiple files |
+| `List(ctx, path, opts...)` | List directory contents |
+| `MakeDir(ctx, path, opts...)` | Create a directory |
+| `Remove(ctx, path, opts...)` | Remove a file or directory |
+| `Rename(ctx, oldPath, newPath, opts...)` | Rename/move a file |
+| `Exists(ctx, path, opts...)` | Check if path exists |
+| `GetInfo(ctx, path, opts...)` | Get file/directory metadata |
+| `WatchDir(ctx, path, callback, opts...)` | Watch directory for changes |
+| `CreateWatcher(ctx, path, opts...)` | Create a poll-based watcher |
+| `GetWatcherEvents(ctx, watcherID, opts...)` | Get events from watcher |
+| `RemoveWatcher(ctx, watcherID, opts...)` | Remove a watcher |
+
 ### Options
 
 #### Sandbox Options
@@ -315,6 +453,14 @@ for _, result := range execution.Results {
 - `WithContextLanguage(lang)` - Set context language
 - `WithCWD(path)` - Set working directory
 - `WithContextRequestTimeout(duration)` - Set request timeout
+
+#### Filesystem Options
+- `WithUser(user)` - Set user for operations
+- `WithFilesystemRequestTimeout(duration)` - Set request timeout
+- `WithDepth(depth)` - Set directory listing depth
+- `WithRecursive(bool)` - Enable recursive directory watching
+- `WithWatchTimeout(ms)` - Set watch timeout in milliseconds
+- `OnWatchExit(handler)` - Callback when watch stops
 
 ## License
 

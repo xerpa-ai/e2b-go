@@ -29,12 +29,15 @@ type Sandbox struct {
 	// Domain is the base domain for sandbox traffic.
 	Domain string
 
-	mu             sync.RWMutex
-	config         *sandboxConfig
-	httpClient     *httpClient
-	closed         bool
-	accessToken    string
-	trafficToken   string
+	// Files provides filesystem operations for the sandbox.
+	Files *Filesystem
+
+	mu           sync.RWMutex
+	config       *sandboxConfig
+	httpClient   *httpClient
+	closed       bool
+	accessToken  string
+	trafficToken string
 }
 
 // E2B API base URL
@@ -102,8 +105,8 @@ func New(opts ...Option) (*Sandbox, error) {
 		Timeout:             int(cfg.timeout.Seconds()),
 		Metadata:            cfg.metadata,
 		EnvVars:             cfg.envVars,
-		Secure:              false, // Match Python SDK test configuration
-		AllowInternetAccess: true,  // Allow internet access by default
+		Secure:              cfg.secure,
+		AllowInternetAccess: true, // Allow internet access by default
 	}
 
 	createResp, err := createSandbox(cfg.httpClient, cfg.apiKey, createReq)
@@ -128,7 +131,9 @@ func New(opts ...Option) (*Sandbox, error) {
 	// Initialize the HTTP client for Jupyter API calls
 	sandbox.initHTTPClient()
 
-	// Wait for the Jupyter server to be ready
+	// Initialize the Filesystem
+	sandbox.Files = newFilesystem(sandbox)
+
 	if err := sandbox.waitForReady(); err != nil {
 		// Clean up if the sandbox fails to become ready
 		sandbox.Close()
@@ -242,11 +247,15 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 
 	sandbox := &Sandbox{
 		ID:     sandboxID,
+		Domain: "e2b.dev", // Default domain for connecting
 		config: cfg,
 	}
 
 	// Initialize the HTTP client for the Jupyter server
 	sandbox.initHTTPClient()
+
+	// Initialize the Filesystem
+	sandbox.Files = newFilesystem(sandbox)
 
 	return sandbox, nil
 }

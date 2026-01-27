@@ -7,14 +7,15 @@ import (
 
 // sandboxConfig holds configuration for creating a Sandbox.
 type sandboxConfig struct {
-	apiKey         string
-	template       string
-	timeout        time.Duration
-	requestTimeout time.Duration
-	httpClient     *http.Client
-	debug          bool
-	metadata       map[string]string
-	envVars        map[string]string
+	apiKey          string
+	template        string
+	timeout         time.Duration
+	requestTimeout  time.Duration
+	httpClient      *http.Client
+	debug           bool
+	secure          bool
+	metadata        map[string]string
+	envVars         map[string]string
 }
 
 // defaultSandboxConfig returns the default sandbox configuration.
@@ -23,6 +24,7 @@ func defaultSandboxConfig() *sandboxConfig {
 		template:       DefaultTemplate,
 		timeout:        DefaultTimeout,
 		requestTimeout: DefaultRequestTimeout,
+		secure:         true, // Enable secure mode by default for filesystem access
 	}
 }
 
@@ -68,6 +70,15 @@ func WithHTTPClient(client *http.Client) Option {
 func WithDebug(debug bool) Option {
 	return func(c *sandboxConfig) {
 		c.debug = debug
+	}
+}
+
+// WithSecure enables secure mode for the sandbox.
+// When enabled, the sandbox requires authentication tokens for filesystem access.
+// This is enabled by default.
+func WithSecure(secure bool) Option {
+	return func(c *sandboxConfig) {
+		c.secure = secure
 	}
 }
 

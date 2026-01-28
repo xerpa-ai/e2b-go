@@ -33,30 +33,32 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// ProcessStartProcedure is the fully-qualified name of the Process's Start RPC.
-	ProcessStartProcedure = "/process.Process/Start"
-	// ProcessConnectProcedure is the fully-qualified name of the Process's Connect RPC.
-	ProcessConnectProcedure = "/process.Process/Connect"
-	// ProcessStreamInputProcedure is the fully-qualified name of the Process's StreamInput RPC.
-	ProcessStreamInputProcedure = "/process.Process/StreamInput"
-	// ProcessKillProcedure is the fully-qualified name of the Process's Kill RPC.
-	ProcessKillProcedure = "/process.Process/Kill"
 	// ProcessListProcedure is the fully-qualified name of the Process's List RPC.
 	ProcessListProcedure = "/process.Process/List"
+	// ProcessConnectProcedure is the fully-qualified name of the Process's Connect RPC.
+	ProcessConnectProcedure = "/process.Process/Connect"
+	// ProcessStartProcedure is the fully-qualified name of the Process's Start RPC.
+	ProcessStartProcedure = "/process.Process/Start"
+	// ProcessUpdateProcedure is the fully-qualified name of the Process's Update RPC.
+	ProcessUpdateProcedure = "/process.Process/Update"
+	// ProcessStreamInputProcedure is the fully-qualified name of the Process's StreamInput RPC.
+	ProcessStreamInputProcedure = "/process.Process/StreamInput"
+	// ProcessSendInputProcedure is the fully-qualified name of the Process's SendInput RPC.
+	ProcessSendInputProcedure = "/process.Process/SendInput"
+	// ProcessSendSignalProcedure is the fully-qualified name of the Process's SendSignal RPC.
+	ProcessSendSignalProcedure = "/process.Process/SendSignal"
 )
 
 // ProcessClient is a client for the process.Process service.
 type ProcessClient interface {
-	// Start starts a new process and streams its output
-	Start(context.Context, *connect.Request[process.StartRequest]) (*connect.ServerStreamForClient[process.ProcessEvent], error)
-	// Connect connects to an already running process
-	Connect(context.Context, *connect.Request[process.ConnectRequest]) (*connect.ServerStreamForClient[process.ProcessEvent], error)
-	// StreamInput sends input to a process's stdin
-	StreamInput(context.Context, *connect.Request[process.StreamInputRequest]) (*connect.Response[process.StreamInputResponse], error)
-	// Kill terminates a process
-	Kill(context.Context, *connect.Request[process.KillRequest]) (*connect.Response[process.KillResponse], error)
-	// List lists all running processes
 	List(context.Context, *connect.Request[process.ListRequest]) (*connect.Response[process.ListResponse], error)
+	Connect(context.Context, *connect.Request[process.ConnectRequest]) (*connect.ServerStreamForClient[process.ConnectResponse], error)
+	Start(context.Context, *connect.Request[process.StartRequest]) (*connect.ServerStreamForClient[process.StartResponse], error)
+	Update(context.Context, *connect.Request[process.UpdateRequest]) (*connect.Response[process.UpdateResponse], error)
+	// Client input stream ensures ordering of messages
+	StreamInput(context.Context) *connect.ClientStreamForClient[process.StreamInputRequest, process.StreamInputResponse]
+	SendInput(context.Context, *connect.Request[process.SendInputRequest]) (*connect.Response[process.SendInputResponse], error)
+	SendSignal(context.Context, *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error)
 }
 
 // NewProcessClient constructs a client for the process.Process service. By default, it uses the
@@ -70,16 +72,28 @@ func NewProcessClient(httpClient connect.HTTPClient, baseURL string, opts ...con
 	baseURL = strings.TrimRight(baseURL, "/")
 	processMethods := process.File_internal_proto_process_process_proto.Services().ByName("Process").Methods()
 	return &processClient{
-		start: connect.NewClient[process.StartRequest, process.ProcessEvent](
+		list: connect.NewClient[process.ListRequest, process.ListResponse](
+			httpClient,
+			baseURL+ProcessListProcedure,
+			connect.WithSchema(processMethods.ByName("List")),
+			connect.WithClientOptions(opts...),
+		),
+		connect: connect.NewClient[process.ConnectRequest, process.ConnectResponse](
+			httpClient,
+			baseURL+ProcessConnectProcedure,
+			connect.WithSchema(processMethods.ByName("Connect")),
+			connect.WithClientOptions(opts...),
+		),
+		start: connect.NewClient[process.StartRequest, process.StartResponse](
 			httpClient,
 			baseURL+ProcessStartProcedure,
 			connect.WithSchema(processMethods.ByName("Start")),
 			connect.WithClientOptions(opts...),
 		),
-		connect: connect.NewClient[process.ConnectRequest, process.ProcessEvent](
+		update: connect.NewClient[process.UpdateRequest, process.UpdateResponse](
 			httpClient,
-			baseURL+ProcessConnectProcedure,
-			connect.WithSchema(processMethods.ByName("Connect")),
+			baseURL+ProcessUpdateProcedure,
+			connect.WithSchema(processMethods.ByName("Update")),
 			connect.WithClientOptions(opts...),
 		),
 		streamInput: connect.NewClient[process.StreamInputRequest, process.StreamInputResponse](
@@ -88,16 +102,16 @@ func NewProcessClient(httpClient connect.HTTPClient, baseURL string, opts ...con
 			connect.WithSchema(processMethods.ByName("StreamInput")),
 			connect.WithClientOptions(opts...),
 		),
-		kill: connect.NewClient[process.KillRequest, process.KillResponse](
+		sendInput: connect.NewClient[process.SendInputRequest, process.SendInputResponse](
 			httpClient,
-			baseURL+ProcessKillProcedure,
-			connect.WithSchema(processMethods.ByName("Kill")),
+			baseURL+ProcessSendInputProcedure,
+			connect.WithSchema(processMethods.ByName("SendInput")),
 			connect.WithClientOptions(opts...),
 		),
-		list: connect.NewClient[process.ListRequest, process.ListResponse](
+		sendSignal: connect.NewClient[process.SendSignalRequest, process.SendSignalResponse](
 			httpClient,
-			baseURL+ProcessListProcedure,
-			connect.WithSchema(processMethods.ByName("List")),
+			baseURL+ProcessSendSignalProcedure,
+			connect.WithSchema(processMethods.ByName("SendSignal")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -105,31 +119,13 @@ func NewProcessClient(httpClient connect.HTTPClient, baseURL string, opts ...con
 
 // processClient implements ProcessClient.
 type processClient struct {
-	start       *connect.Client[process.StartRequest, process.ProcessEvent]
-	connect     *connect.Client[process.ConnectRequest, process.ProcessEvent]
-	streamInput *connect.Client[process.StreamInputRequest, process.StreamInputResponse]
-	kill        *connect.Client[process.KillRequest, process.KillResponse]
 	list        *connect.Client[process.ListRequest, process.ListResponse]
-}
-
-// Start calls process.Process.Start.
-func (c *processClient) Start(ctx context.Context, req *connect.Request[process.StartRequest]) (*connect.ServerStreamForClient[process.ProcessEvent], error) {
-	return c.start.CallServerStream(ctx, req)
-}
-
-// Connect calls process.Process.Connect.
-func (c *processClient) Connect(ctx context.Context, req *connect.Request[process.ConnectRequest]) (*connect.ServerStreamForClient[process.ProcessEvent], error) {
-	return c.connect.CallServerStream(ctx, req)
-}
-
-// StreamInput calls process.Process.StreamInput.
-func (c *processClient) StreamInput(ctx context.Context, req *connect.Request[process.StreamInputRequest]) (*connect.Response[process.StreamInputResponse], error) {
-	return c.streamInput.CallUnary(ctx, req)
-}
-
-// Kill calls process.Process.Kill.
-func (c *processClient) Kill(ctx context.Context, req *connect.Request[process.KillRequest]) (*connect.Response[process.KillResponse], error) {
-	return c.kill.CallUnary(ctx, req)
+	connect     *connect.Client[process.ConnectRequest, process.ConnectResponse]
+	start       *connect.Client[process.StartRequest, process.StartResponse]
+	update      *connect.Client[process.UpdateRequest, process.UpdateResponse]
+	streamInput *connect.Client[process.StreamInputRequest, process.StreamInputResponse]
+	sendInput   *connect.Client[process.SendInputRequest, process.SendInputResponse]
+	sendSignal  *connect.Client[process.SendSignalRequest, process.SendSignalResponse]
 }
 
 // List calls process.Process.List.
@@ -137,18 +133,46 @@ func (c *processClient) List(ctx context.Context, req *connect.Request[process.L
 	return c.list.CallUnary(ctx, req)
 }
 
+// Connect calls process.Process.Connect.
+func (c *processClient) Connect(ctx context.Context, req *connect.Request[process.ConnectRequest]) (*connect.ServerStreamForClient[process.ConnectResponse], error) {
+	return c.connect.CallServerStream(ctx, req)
+}
+
+// Start calls process.Process.Start.
+func (c *processClient) Start(ctx context.Context, req *connect.Request[process.StartRequest]) (*connect.ServerStreamForClient[process.StartResponse], error) {
+	return c.start.CallServerStream(ctx, req)
+}
+
+// Update calls process.Process.Update.
+func (c *processClient) Update(ctx context.Context, req *connect.Request[process.UpdateRequest]) (*connect.Response[process.UpdateResponse], error) {
+	return c.update.CallUnary(ctx, req)
+}
+
+// StreamInput calls process.Process.StreamInput.
+func (c *processClient) StreamInput(ctx context.Context) *connect.ClientStreamForClient[process.StreamInputRequest, process.StreamInputResponse] {
+	return c.streamInput.CallClientStream(ctx)
+}
+
+// SendInput calls process.Process.SendInput.
+func (c *processClient) SendInput(ctx context.Context, req *connect.Request[process.SendInputRequest]) (*connect.Response[process.SendInputResponse], error) {
+	return c.sendInput.CallUnary(ctx, req)
+}
+
+// SendSignal calls process.Process.SendSignal.
+func (c *processClient) SendSignal(ctx context.Context, req *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {
+	return c.sendSignal.CallUnary(ctx, req)
+}
+
 // ProcessHandler is an implementation of the process.Process service.
 type ProcessHandler interface {
-	// Start starts a new process and streams its output
-	Start(context.Context, *connect.Request[process.StartRequest], *connect.ServerStream[process.ProcessEvent]) error
-	// Connect connects to an already running process
-	Connect(context.Context, *connect.Request[process.ConnectRequest], *connect.ServerStream[process.ProcessEvent]) error
-	// StreamInput sends input to a process's stdin
-	StreamInput(context.Context, *connect.Request[process.StreamInputRequest]) (*connect.Response[process.StreamInputResponse], error)
-	// Kill terminates a process
-	Kill(context.Context, *connect.Request[process.KillRequest]) (*connect.Response[process.KillResponse], error)
-	// List lists all running processes
 	List(context.Context, *connect.Request[process.ListRequest]) (*connect.Response[process.ListResponse], error)
+	Connect(context.Context, *connect.Request[process.ConnectRequest], *connect.ServerStream[process.ConnectResponse]) error
+	Start(context.Context, *connect.Request[process.StartRequest], *connect.ServerStream[process.StartResponse]) error
+	Update(context.Context, *connect.Request[process.UpdateRequest]) (*connect.Response[process.UpdateResponse], error)
+	// Client input stream ensures ordering of messages
+	StreamInput(context.Context, *connect.ClientStream[process.StreamInputRequest]) (*connect.Response[process.StreamInputResponse], error)
+	SendInput(context.Context, *connect.Request[process.SendInputRequest]) (*connect.Response[process.SendInputResponse], error)
+	SendSignal(context.Context, *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error)
 }
 
 // NewProcessHandler builds an HTTP handler from the service implementation. It returns the path on
@@ -158,10 +182,10 @@ type ProcessHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewProcessHandler(svc ProcessHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	processMethods := process.File_internal_proto_process_process_proto.Services().ByName("Process").Methods()
-	processStartHandler := connect.NewServerStreamHandler(
-		ProcessStartProcedure,
-		svc.Start,
-		connect.WithSchema(processMethods.ByName("Start")),
+	processListHandler := connect.NewUnaryHandler(
+		ProcessListProcedure,
+		svc.List,
+		connect.WithSchema(processMethods.ByName("List")),
 		connect.WithHandlerOptions(opts...),
 	)
 	processConnectHandler := connect.NewServerStreamHandler(
@@ -170,36 +194,52 @@ func NewProcessHandler(svc ProcessHandler, opts ...connect.HandlerOption) (strin
 		connect.WithSchema(processMethods.ByName("Connect")),
 		connect.WithHandlerOptions(opts...),
 	)
-	processStreamInputHandler := connect.NewUnaryHandler(
+	processStartHandler := connect.NewServerStreamHandler(
+		ProcessStartProcedure,
+		svc.Start,
+		connect.WithSchema(processMethods.ByName("Start")),
+		connect.WithHandlerOptions(opts...),
+	)
+	processUpdateHandler := connect.NewUnaryHandler(
+		ProcessUpdateProcedure,
+		svc.Update,
+		connect.WithSchema(processMethods.ByName("Update")),
+		connect.WithHandlerOptions(opts...),
+	)
+	processStreamInputHandler := connect.NewClientStreamHandler(
 		ProcessStreamInputProcedure,
 		svc.StreamInput,
 		connect.WithSchema(processMethods.ByName("StreamInput")),
 		connect.WithHandlerOptions(opts...),
 	)
-	processKillHandler := connect.NewUnaryHandler(
-		ProcessKillProcedure,
-		svc.Kill,
-		connect.WithSchema(processMethods.ByName("Kill")),
+	processSendInputHandler := connect.NewUnaryHandler(
+		ProcessSendInputProcedure,
+		svc.SendInput,
+		connect.WithSchema(processMethods.ByName("SendInput")),
 		connect.WithHandlerOptions(opts...),
 	)
-	processListHandler := connect.NewUnaryHandler(
-		ProcessListProcedure,
-		svc.List,
-		connect.WithSchema(processMethods.ByName("List")),
+	processSendSignalHandler := connect.NewUnaryHandler(
+		ProcessSendSignalProcedure,
+		svc.SendSignal,
+		connect.WithSchema(processMethods.ByName("SendSignal")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/process.Process/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case ProcessStartProcedure:
-			processStartHandler.ServeHTTP(w, r)
-		case ProcessConnectProcedure:
-			processConnectHandler.ServeHTTP(w, r)
-		case ProcessStreamInputProcedure:
-			processStreamInputHandler.ServeHTTP(w, r)
-		case ProcessKillProcedure:
-			processKillHandler.ServeHTTP(w, r)
 		case ProcessListProcedure:
 			processListHandler.ServeHTTP(w, r)
+		case ProcessConnectProcedure:
+			processConnectHandler.ServeHTTP(w, r)
+		case ProcessStartProcedure:
+			processStartHandler.ServeHTTP(w, r)
+		case ProcessUpdateProcedure:
+			processUpdateHandler.ServeHTTP(w, r)
+		case ProcessStreamInputProcedure:
+			processStreamInputHandler.ServeHTTP(w, r)
+		case ProcessSendInputProcedure:
+			processSendInputHandler.ServeHTTP(w, r)
+		case ProcessSendSignalProcedure:
+			processSendSignalHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -209,22 +249,30 @@ func NewProcessHandler(svc ProcessHandler, opts ...connect.HandlerOption) (strin
 // UnimplementedProcessHandler returns CodeUnimplemented from all methods.
 type UnimplementedProcessHandler struct{}
 
-func (UnimplementedProcessHandler) Start(context.Context, *connect.Request[process.StartRequest], *connect.ServerStream[process.ProcessEvent]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.Start is not implemented"))
+func (UnimplementedProcessHandler) List(context.Context, *connect.Request[process.ListRequest]) (*connect.Response[process.ListResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.List is not implemented"))
 }
 
-func (UnimplementedProcessHandler) Connect(context.Context, *connect.Request[process.ConnectRequest], *connect.ServerStream[process.ProcessEvent]) error {
+func (UnimplementedProcessHandler) Connect(context.Context, *connect.Request[process.ConnectRequest], *connect.ServerStream[process.ConnectResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.Connect is not implemented"))
 }
 
-func (UnimplementedProcessHandler) StreamInput(context.Context, *connect.Request[process.StreamInputRequest]) (*connect.Response[process.StreamInputResponse], error) {
+func (UnimplementedProcessHandler) Start(context.Context, *connect.Request[process.StartRequest], *connect.ServerStream[process.StartResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.Start is not implemented"))
+}
+
+func (UnimplementedProcessHandler) Update(context.Context, *connect.Request[process.UpdateRequest]) (*connect.Response[process.UpdateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.Update is not implemented"))
+}
+
+func (UnimplementedProcessHandler) StreamInput(context.Context, *connect.ClientStream[process.StreamInputRequest]) (*connect.Response[process.StreamInputResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.StreamInput is not implemented"))
 }
 
-func (UnimplementedProcessHandler) Kill(context.Context, *connect.Request[process.KillRequest]) (*connect.Response[process.KillResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.Kill is not implemented"))
+func (UnimplementedProcessHandler) SendInput(context.Context, *connect.Request[process.SendInputRequest]) (*connect.Response[process.SendInputResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.SendInput is not implemented"))
 }
 
-func (UnimplementedProcessHandler) List(context.Context, *connect.Request[process.ListRequest]) (*connect.Response[process.ListResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.List is not implemented"))
+func (UnimplementedProcessHandler) SendSignal(context.Context, *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("process.Process.SendSignal is not implemented"))
 }

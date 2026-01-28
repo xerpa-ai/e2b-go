@@ -19,6 +19,7 @@ type Commands struct {
 	accessToken  string
 	trafficToken string
 	sandbox      *Sandbox
+	envdVersion  string
 }
 
 // newCommands creates a new Commands instance.
@@ -45,6 +46,7 @@ func newCommands(sandbox *Sandbox) *Commands {
 		accessToken:  sandbox.accessToken,
 		trafficToken: sandbox.TrafficAccessToken,
 		sandbox:      sandbox,
+		envdVersion:  sandbox.envdVersion,
 	}
 }
 
@@ -130,12 +132,17 @@ func (c *Commands) Kill(ctx context.Context, pid uint32, opts ...CommandRequestO
 	ctx, cancel := c.applyTimeout(ctx, cfg.requestTimeout)
 	defer cancel()
 
-	req := connect.NewRequest(&processpb.KillRequest{
-		Pid: pid,
+	req := connect.NewRequest(&processpb.SendSignalRequest{
+		Process: &processpb.ProcessSelector{
+			Selector: &processpb.ProcessSelector_Pid{
+				Pid: pid,
+			},
+		},
+		Signal: processpb.Signal_SIGNAL_SIGKILL,
 	})
 	c.setRPCHeaders(req)
 
-	resp, err := c.rpcClient.Kill(ctx, req)
+	_, err := c.rpcClient.SendSignal(ctx, req)
 	if err != nil {
 		// Check for not found error
 		if connectErr, ok := err.(*connect.Error); ok {
@@ -146,7 +153,7 @@ func (c *Commands) Kill(ctx context.Context, pid uint32, opts ...CommandRequestO
 		return false, c.wrapRPCError(ctx, err)
 	}
 
-	return resp.Msg.GetKilled(), nil
+	return true, nil
 }
 
 // SendStdin sends data to the stdin of a running command.
@@ -163,13 +170,21 @@ func (c *Commands) SendStdin(ctx context.Context, pid uint32, data string, opts 
 	ctx, cancel := c.applyTimeout(ctx, cfg.requestTimeout)
 	defer cancel()
 
-	req := connect.NewRequest(&processpb.StreamInputRequest{
-		Pid:   pid,
-		Stdin: []byte(data),
+	req := connect.NewRequest(&processpb.SendInputRequest{
+		Process: &processpb.ProcessSelector{
+			Selector: &processpb.ProcessSelector_Pid{
+				Pid: pid,
+			},
+		},
+		Input: &processpb.ProcessInput{
+			Input: &processpb.ProcessInput_Stdin{
+				Stdin: []byte(data),
+			},
+		},
 	})
 	c.setRPCHeaders(req)
 
-	_, err := c.rpcClient.StreamInput(ctx, req)
+	_, err := c.rpcClient.SendInput(ctx, req)
 	if err != nil {
 		return c.wrapRPCError(ctx, err)
 	}
@@ -231,11 +246,17 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		Cmd:  "/bin/bash",
 		Args: []string{"-l", "-c", cmd},
 		Envs: cfg.envs,
-		Cwd:  cfg.cwd,
+	}
+
+	// Set cwd if provided
+	if cfg.cwd != "" {
+		processConfig.Cwd = &cfg.cwd
 	}
 
 	req := connect.NewRequest(&processpb.StartRequest{
-		Config: processConfig,
+		Process: processConfig,
+		Stdin:   &cfg.stdin,
+		Tag:     cfg.tag,
 	})
 	c.setStreamingHeaders(req)
 
@@ -262,11 +283,10 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 	// Read events until we get a StartEvent
 	// The server may send data events before the start event
 	var pid uint32
-	var earlyData []byte
+	var earlyStdout []byte
 	var earlyStderr []byte
 	eventCount := 0
 	maxEvents := 100 // Safety limit
-	var eventTypes []string
 
 	for eventCount < maxEvents {
 		if !stream.Receive() {
@@ -275,14 +295,10 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 
 			// If we collected some data but stream ended without Start/End events,
 			// the command likely completed - return the collected output
-			if eventCount > 0 && (len(earlyData) > 0 || len(earlyStderr) > 0) {
-				// Parse the collected data - the stderr field often contains the actual stdout
-				// with a length prefix due to protobuf encoding quirks
-				stdout := parseOutputData(earlyData, earlyStderr)
-
+			if eventCount > 0 && (len(earlyStdout) > 0 || len(earlyStderr) > 0) {
 				result := &CommandResult{
-					Stdout:   stdout,
-					Stderr:   "",
+					Stdout:   string(earlyStdout),
+					Stderr:   string(earlyStderr),
 					ExitCode: 0,
 				}
 
@@ -302,8 +318,11 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		}
 		eventCount++
 
-		event := stream.Msg()
-		eventTypes = append(eventTypes, fmt.Sprintf("%T", event.GetEvent()))
+		resp := stream.Msg()
+		event := resp.GetEvent()
+		if event == nil {
+			continue
+		}
 
 		// Check for start event
 		if startEvent := event.GetStart(); startEvent != nil {
@@ -313,30 +332,30 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 
 		// Collect any early data events
 		if dataEvent := event.GetData(); dataEvent != nil {
-			earlyData = append(earlyData, dataEvent.GetStdout()...)
-			earlyStderr = append(earlyStderr, dataEvent.GetStderr()...)
+			if stdout := dataEvent.GetStdout(); stdout != nil {
+				earlyStdout = append(earlyStdout, stdout...)
+			}
+			if stderr := dataEvent.GetStderr(); stderr != nil {
+				earlyStderr = append(earlyStderr, stderr...)
+			}
 			continue
 		}
 
-		// If we get an end event before start, extract PID from it if available
+		// If we get an end event before start, extract result
 		if endEvent := event.GetEnd(); endEvent != nil {
-			// The command might have finished before we got a start event
-			// In this case, we should still return the result
 			streamCancel()
 
-			exitCode := 0
-			if endEvent.ExitCode != nil {
-				exitCode = int(*endEvent.ExitCode)
+			exitCode := int(endEvent.GetExitCode())
+			errorMsg := ""
+			if endEvent.Error != nil {
+				errorMsg = *endEvent.Error
 			}
 
-			// Parse the collected data
-			stdout := parseOutputData(earlyData, earlyStderr)
-
 			result := &CommandResult{
-				Stdout:   stdout,
-				Stderr:   "",
+				Stdout:   string(earlyStdout),
+				Stderr:   string(earlyStderr),
 				ExitCode: exitCode,
-				Error:    endEvent.GetError(),
+				Error:    errorMsg,
 			}
 
 			if exitCode != 0 {
@@ -344,7 +363,7 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 					Stdout:       result.Stdout,
 					Stderr:       result.Stderr,
 					ExitCode:     exitCode,
-					ErrorMessage: endEvent.GetError(),
+					ErrorMessage: errorMsg,
 				}
 			}
 
@@ -379,10 +398,10 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 	)
 
 	// Process any early data that was received before the start event
-	if len(earlyData) > 0 {
-		handle.appendStdout(string(earlyData))
+	if len(earlyStdout) > 0 {
+		handle.appendStdout(string(earlyStdout))
 		if cfg.onStdout != nil {
-			cfg.onStdout(string(earlyData))
+			cfg.onStdout(string(earlyStdout))
 		}
 	}
 	if len(earlyStderr) > 0 {
@@ -416,7 +435,11 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 	}
 
 	req := connect.NewRequest(&processpb.ConnectRequest{
-		Pid: pid,
+		Process: &processpb.ProcessSelector{
+			Selector: &processpb.ProcessSelector_Pid{
+				Pid: pid,
+			},
+		},
 	})
 	c.setStreamingHeaders(req)
 
@@ -444,15 +467,21 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 		return nil, fmt.Errorf("failed to connect to process: no start event received")
 	}
 
-	firstEvent := stream.Msg()
-	startEvent := firstEvent.GetStart()
+	resp := stream.Msg()
+	event := resp.GetEvent()
+	if event == nil {
+		streamCancel()
+		return nil, fmt.Errorf("failed to connect to process: expected event, got nil")
+	}
+
+	startEvent := event.GetStart()
 	if startEvent == nil {
 		streamCancel()
-		return nil, fmt.Errorf("failed to connect to process: expected start event, got %T", firstEvent.GetEvent())
+		return nil, fmt.Errorf("failed to connect to process: expected start event, got %T", event.GetEvent())
 	}
 
 	// Create the handle
-	handle := newCommandHandle(
+	handle := newCommandHandleFromConnect(
 		startEvent.GetPid(),
 		stream,
 		func() (bool, error) {
@@ -464,47 +493,6 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 	)
 
 	return handle, nil
-}
-
-// parseOutputData extracts the actual output from the collected data bytes.
-// Due to protobuf encoding quirks, the actual stdout content may be in the stderr field
-// with a length prefix, or the data may need other processing.
-func parseOutputData(stdout, stderr []byte) string {
-	// If stderr contains length-prefixed data (starts with field tag 0x0a and length byte),
-	// extract the actual content
-	if len(stderr) >= 2 && stderr[0] == 0x0a {
-		length := int(stderr[1])
-		if len(stderr) >= 2+length {
-			return string(stderr[2 : 2+length])
-		}
-	}
-
-	// If stderr has raw content, use it
-	if len(stderr) > 0 {
-		// Try to find printable content
-		result := make([]byte, 0, len(stderr))
-		for _, b := range stderr {
-			if b >= 32 && b < 127 || b == '\n' || b == '\r' || b == '\t' {
-				result = append(result, b)
-			}
-		}
-		if len(result) > 0 {
-			return string(result)
-		}
-	}
-
-	// Fall back to stdout
-	if len(stdout) > 0 {
-		result := make([]byte, 0, len(stdout))
-		for _, b := range stdout {
-			if b >= 32 && b < 127 || b == '\n' || b == '\r' || b == '\t' {
-				result = append(result, b)
-			}
-		}
-		return string(result)
-	}
-
-	return ""
 }
 
 // wrapRPCError wraps RPC errors with appropriate context.

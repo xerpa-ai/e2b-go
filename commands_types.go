@@ -50,24 +50,42 @@ func processInfoFromProto(p *processpb.ProcessInfo) *ProcessInfo {
 		return nil
 	}
 
-	args := p.GetArgs()
+	config := p.GetConfig()
+	if config == nil {
+		return &ProcessInfo{
+			PID:  p.GetPid(),
+			Tag:  getStringValue(p.Tag),
+			Args: []string{},
+			Envs: make(map[string]string),
+		}
+	}
+
+	args := config.GetArgs()
 	if args == nil {
 		args = []string{}
 	}
 
-	envs := p.GetEnvs()
+	envs := config.GetEnvs()
 	if envs == nil {
 		envs = make(map[string]string)
 	}
 
 	return &ProcessInfo{
 		PID:  p.GetPid(),
-		Cmd:  p.GetCmd(),
+		Tag:  getStringValue(p.Tag),
+		Cmd:  config.GetCmd(),
 		Args: args,
 		Envs: envs,
-		Cwd:  p.GetCwd(),
-		// Note: Tag is not in the current proto definition
+		Cwd:  config.GetCwd(),
 	}
+}
+
+// getStringValue safely gets a string value from a pointer.
+func getStringValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // CommandExitError is returned when a command exits with a non-zero exit code.

@@ -11,14 +11,16 @@ type commandConfig struct {
 	requestTimeout time.Duration
 	onStdout       func(output string)
 	onStderr       func(output string)
+	stdin          bool
+	tag            *string
 }
 
 // defaultCommandConfig returns the default command configuration.
-// Default timeout is 60 seconds as per Python SDK.
+// Default timeout is 60 seconds as per official SDKs.
 func defaultCommandConfig() *commandConfig {
 	return &commandConfig{
 		timeout: 60 * time.Second,
-		user:    "user",
+		stdin:   false,
 	}
 }
 
@@ -41,10 +43,28 @@ func WithCommandEnvs(envs map[string]string) CommandOption {
 }
 
 // WithCommandUser sets the user to run the command as.
-// Default is "user".
+// Defaults to the sandbox template's default user if not specified.
 func WithCommandUser(user string) CommandOption {
 	return func(c *commandConfig) {
 		c.user = user
+	}
+}
+
+// WithStdin enables or disables stdin for the command.
+// If true, the command will have a stdin stream that you can send data to
+// using Commands.SendStdin or CommandHandle.SendStdin.
+// Default is false.
+func WithStdin(enabled bool) CommandOption {
+	return func(c *commandConfig) {
+		c.stdin = enabled
+	}
+}
+
+// WithTag sets a custom tag for identifying the command.
+// This can be used to identify special commands like start commands in custom templates.
+func WithTag(tag string) CommandOption {
+	return func(c *commandConfig) {
+		c.tag = &tag
 	}
 }
 

@@ -28,10 +28,10 @@ type CommandHandle struct {
 	onStderr func(string)
 }
 
-// newCommandHandle creates a new CommandHandle and starts processing events.
+// newCommandHandle creates a new CommandHandle for Start responses and starts processing events.
 func newCommandHandle(
 	pid uint32,
-	stream *connect.ServerStreamForClient[processpb.ProcessEvent],
+	stream *connect.ServerStreamForClient[processpb.StartResponse],
 	handleKill func() (bool, error),
 	onStdout func(string),
 	onStderr func(string),
@@ -45,13 +45,35 @@ func newCommandHandle(
 	}
 
 	// Start background goroutine to process events
-	go h.processEvents(stream)
+	go h.processStartEvents(stream)
 
 	return h
 }
 
-// processEvents reads events from the stream and updates internal state.
-func (h *CommandHandle) processEvents(stream *connect.ServerStreamForClient[processpb.ProcessEvent]) {
+// newCommandHandleFromConnect creates a new CommandHandle for Connect responses and starts processing events.
+func newCommandHandleFromConnect(
+	pid uint32,
+	stream *connect.ServerStreamForClient[processpb.ConnectResponse],
+	handleKill func() (bool, error),
+	onStdout func(string),
+	onStderr func(string),
+) *CommandHandle {
+	h := &CommandHandle{
+		pid:        pid,
+		handleKill: handleKill,
+		done:       make(chan struct{}),
+		onStdout:   onStdout,
+		onStderr:   onStderr,
+	}
+
+	// Start background goroutine to process events
+	go h.processConnectEvents(stream)
+
+	return h
+}
+
+// processStartEvents reads events from a Start stream and updates internal state.
+func (h *CommandHandle) processStartEvents(stream *connect.ServerStreamForClient[processpb.StartResponse]) {
 	defer close(h.done)
 
 	for stream.Receive() {
@@ -62,8 +84,40 @@ func (h *CommandHandle) processEvents(stream *connect.ServerStreamForClient[proc
 		}
 		h.mu.Unlock()
 
-		event := stream.Msg()
-		h.handleEvent(event)
+		resp := stream.Msg()
+		event := resp.GetEvent()
+		if event != nil {
+			h.handleEvent(event)
+		}
+	}
+
+	// Check for stream error
+	if err := stream.Err(); err != nil {
+		h.mu.Lock()
+		if h.err == nil {
+			h.err = err
+		}
+		h.mu.Unlock()
+	}
+}
+
+// processConnectEvents reads events from a Connect stream and updates internal state.
+func (h *CommandHandle) processConnectEvents(stream *connect.ServerStreamForClient[processpb.ConnectResponse]) {
+	defer close(h.done)
+
+	for stream.Receive() {
+		h.mu.Lock()
+		if h.canceled {
+			h.mu.Unlock()
+			return
+		}
+		h.mu.Unlock()
+
+		resp := stream.Msg()
+		event := resp.GetEvent()
+		if event != nil {
+			h.handleEvent(event)
+		}
 	}
 
 	// Check for stream error
@@ -92,8 +146,9 @@ func (h *CommandHandle) handleEvent(event *processpb.ProcessEvent) {
 
 // handleDataEvent processes stdout/stderr data.
 func (h *CommandHandle) handleDataEvent(data *processpb.ProcessEvent_DataEvent) {
-	if len(data.GetStdout()) > 0 {
-		out := string(data.GetStdout())
+	// Handle stdout
+	if stdout := data.GetStdout(); stdout != nil {
+		out := string(stdout)
 		h.mu.Lock()
 		h.stdout.WriteString(out)
 		callback := h.onStdout
@@ -104,8 +159,9 @@ func (h *CommandHandle) handleDataEvent(data *processpb.ProcessEvent_DataEvent) 
 		}
 	}
 
-	if len(data.GetStderr()) > 0 {
-		out := string(data.GetStderr())
+	// Handle stderr
+	if stderr := data.GetStderr(); stderr != nil {
+		out := string(stderr)
 		h.mu.Lock()
 		h.stderr.WriteString(out)
 		callback := h.onStderr
@@ -115,6 +171,8 @@ func (h *CommandHandle) handleDataEvent(data *processpb.ProcessEvent_DataEvent) 
 			callback(out)
 		}
 	}
+
+	// PTY output is currently ignored
 }
 
 // handleEndEvent processes the end event when the command finishes.
@@ -122,16 +180,17 @@ func (h *CommandHandle) handleEndEvent(end *processpb.ProcessEvent_EndEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	exitCode := 0
-	if end.ExitCode != nil {
-		exitCode = int(*end.ExitCode)
+	exitCode := int(end.GetExitCode())
+	errorMsg := ""
+	if end.Error != nil {
+		errorMsg = *end.Error
 	}
 
 	h.result = &CommandResult{
 		Stdout:   h.stdout.String(),
 		Stderr:   h.stderr.String(),
 		ExitCode: exitCode,
-		Error:    end.GetError(),
+		Error:    errorMsg,
 	}
 }
 

@@ -98,7 +98,7 @@ type PointChart struct {
 	YTicks      []any       `json:"y_ticks"`
 	YTickLabels []string    `json:"y_tick_labels"`
 	YScale      ScaleType   `json:"y_scale"`
-	Elements    []PointData `json:"-"`
+	Data        []PointData `json:"-"`
 }
 
 // LineChart represents a line chart.
@@ -125,13 +125,13 @@ func (c *ScatterChart) ChartType() ChartType {
 type BarData struct {
 	Label string `json:"label"`
 	Group string `json:"group"`
-	Value string `json:"value"`
+	Value any    `json:"value"`
 }
 
 // BarChart represents a bar chart.
 type BarChart struct {
 	Chart2D
-	Elements []BarData `json:"-"`
+	Data []BarData `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -149,7 +149,7 @@ type PieData struct {
 // PieChart represents a pie chart.
 type PieChart struct {
 	BaseChart
-	Elements []PieData `json:"-"`
+	Data []PieData `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -171,7 +171,7 @@ type BoxAndWhiskerData struct {
 // BoxAndWhiskerChart represents a box and whisker chart.
 type BoxAndWhiskerChart struct {
 	Chart2D
-	Elements []BoxAndWhiskerData `json:"-"`
+	Data []BoxAndWhiskerData `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -182,7 +182,7 @@ func (c *BoxAndWhiskerChart) ChartType() ChartType {
 // SuperChart represents a chart containing multiple sub-charts.
 type SuperChart struct {
 	BaseChart
-	Elements []Chart `json:"-"`
+	SubCharts []Chart `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -214,7 +214,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal line chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Elements = parsePointData(data)
+		chart.Data = parsePointData(data)
 		return &chart, nil
 
 	case ChartTypeScatter:
@@ -223,7 +223,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal scatter chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Elements = parsePointData(data)
+		chart.Data = parsePointData(data)
 		return &chart, nil
 
 	case ChartTypeBar:
@@ -232,7 +232,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal bar chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Elements = parseBarData(data)
+		chart.Data = parseBarData(data)
 		return &chart, nil
 
 	case ChartTypePie:
@@ -241,7 +241,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal pie chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Elements = parsePieData(data)
+		chart.Data = parsePieData(data)
 		return &chart, nil
 
 	case ChartTypeBoxAndWhisker:
@@ -250,7 +250,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal box and whisker chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Elements = parseBoxAndWhiskerData(data)
+		chart.Data = parseBoxAndWhiskerData(data)
 		return &chart, nil
 
 	case ChartTypeSuperChart:
@@ -265,7 +265,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 				if elemMap, ok := elem.(map[string]any); ok {
 					subChart, err := DeserializeChart(elemMap)
 					if err == nil && subChart != nil {
-						chart.Elements = append(chart.Elements, subChart)
+						chart.SubCharts = append(chart.SubCharts, subChart)
 					}
 				}
 			}
@@ -335,7 +335,7 @@ func parseBarData(data map[string]any) []BarData {
 		bd := BarData{
 			Label: getString(elemMap, "label"),
 			Group: getString(elemMap, "group"),
-			Value: getStringOrNumber(elemMap, "value"),
+			Value: elemMap["value"],
 		}
 
 		result = append(result, bd)
@@ -415,24 +415,6 @@ func getString(m map[string]any, key string) string {
 		return v
 	}
 	return ""
-}
-
-// getStringOrNumber extracts a value as string, converting numbers if needed.
-func getStringOrNumber(m map[string]any, key string) string {
-	v, ok := m[key]
-	if !ok {
-		return ""
-	}
-	switch val := v.(type) {
-	case string:
-		return val
-	case float64:
-		return fmt.Sprintf("%v", val)
-	case int:
-		return fmt.Sprintf("%d", val)
-	default:
-		return fmt.Sprintf("%v", val)
-	}
 }
 
 // getFloat safely extracts a float64 from a map.

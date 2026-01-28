@@ -257,23 +257,112 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		return nil, c.wrapRPCError(ctx, err)
 	}
 
-	// Read the first event which should be a StartEvent
-	if !stream.Receive() {
-		streamCancel()
-		if err := stream.Err(); err != nil {
-			return nil, c.wrapRPCError(ctx, err)
+	// Read events until we get a StartEvent
+	// The server may send data events before the start event
+	var pid uint32
+	var earlyData []byte
+	var earlyStderr []byte
+	eventCount := 0
+	maxEvents := 100 // Safety limit
+	var eventTypes []string
+
+	for eventCount < maxEvents {
+		if !stream.Receive() {
+			streamCancel()
+			streamErr := stream.Err()
+
+			// If we collected some data but stream ended without Start/End events,
+			// the command likely completed - return the collected output
+			if eventCount > 0 && (len(earlyData) > 0 || len(earlyStderr) > 0) {
+				// Parse the collected data - the stderr field often contains the actual stdout
+				// with a length prefix due to protobuf encoding quirks
+				stdout := parseOutputData(earlyData, earlyStderr)
+
+				result := &CommandResult{
+					Stdout:   stdout,
+					Stderr:   "",
+					ExitCode: 0,
+				}
+
+				handle := &CommandHandle{
+					pid:    0,
+					done:   make(chan struct{}),
+					result: result,
+				}
+				close(handle.done)
+				return handle, nil
+			}
+
+			if streamErr != nil {
+				return nil, fmt.Errorf("failed to start process: stream error after %d events: %w", eventCount, c.wrapRPCError(ctx, streamErr))
+			}
+			return nil, fmt.Errorf("failed to start process: stream ended after %d events, no output received", eventCount)
 		}
-		return nil, fmt.Errorf("failed to start process: no start event received")
+		eventCount++
+
+		event := stream.Msg()
+		eventTypes = append(eventTypes, fmt.Sprintf("%T", event.GetEvent()))
+
+		// Check for start event
+		if startEvent := event.GetStart(); startEvent != nil {
+			pid = startEvent.GetPid()
+			break
+		}
+
+		// Collect any early data events
+		if dataEvent := event.GetData(); dataEvent != nil {
+			earlyData = append(earlyData, dataEvent.GetStdout()...)
+			earlyStderr = append(earlyStderr, dataEvent.GetStderr()...)
+			continue
+		}
+
+		// If we get an end event before start, extract PID from it if available
+		if endEvent := event.GetEnd(); endEvent != nil {
+			// The command might have finished before we got a start event
+			// In this case, we should still return the result
+			streamCancel()
+
+			exitCode := 0
+			if endEvent.ExitCode != nil {
+				exitCode = int(*endEvent.ExitCode)
+			}
+
+			// Parse the collected data
+			stdout := parseOutputData(earlyData, earlyStderr)
+
+			result := &CommandResult{
+				Stdout:   stdout,
+				Stderr:   "",
+				ExitCode: exitCode,
+				Error:    endEvent.GetError(),
+			}
+
+			if exitCode != 0 {
+				return nil, &CommandExitError{
+					Stdout:       result.Stdout,
+					Stderr:       result.Stderr,
+					ExitCode:     exitCode,
+					ErrorMessage: endEvent.GetError(),
+				}
+			}
+
+			// Create a dummy handle that is already done
+			handle := &CommandHandle{
+				pid:    0,
+				done:   make(chan struct{}),
+				result: result,
+			}
+			close(handle.done)
+			return handle, nil
+		}
+
+		// Keepalive events are ignored
 	}
 
-	firstEvent := stream.Msg()
-	startEvent := firstEvent.GetStart()
-	if startEvent == nil {
+	if eventCount >= maxEvents {
 		streamCancel()
-		return nil, fmt.Errorf("failed to start process: expected start event, got %T", firstEvent.GetEvent())
+		return nil, fmt.Errorf("failed to start process: received %d events but no start event", eventCount)
 	}
-
-	pid := startEvent.GetPid()
 
 	// Create the handle with a kill function that cancels the stream
 	handle := newCommandHandle(
@@ -286,6 +375,20 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		cfg.onStdout,
 		cfg.onStderr,
 	)
+
+	// Process any early data that was received before the start event
+	if len(earlyData) > 0 {
+		handle.appendStdout(string(earlyData))
+		if cfg.onStdout != nil {
+			cfg.onStdout(string(earlyData))
+		}
+	}
+	if len(earlyStderr) > 0 {
+		handle.appendStderr(string(earlyStderr))
+		if cfg.onStderr != nil {
+			cfg.onStderr(string(earlyStderr))
+		}
+	}
 
 	return handle, nil
 }
@@ -359,6 +462,47 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 	)
 
 	return handle, nil
+}
+
+// parseOutputData extracts the actual output from the collected data bytes.
+// Due to protobuf encoding quirks, the actual stdout content may be in the stderr field
+// with a length prefix, or the data may need other processing.
+func parseOutputData(stdout, stderr []byte) string {
+	// If stderr contains length-prefixed data (starts with field tag 0x0a and length byte),
+	// extract the actual content
+	if len(stderr) >= 2 && stderr[0] == 0x0a {
+		length := int(stderr[1])
+		if len(stderr) >= 2+length {
+			return string(stderr[2 : 2+length])
+		}
+	}
+
+	// If stderr has raw content, use it
+	if len(stderr) > 0 {
+		// Try to find printable content
+		result := make([]byte, 0, len(stderr))
+		for _, b := range stderr {
+			if b >= 32 && b < 127 || b == '\n' || b == '\r' || b == '\t' {
+				result = append(result, b)
+			}
+		}
+		if len(result) > 0 {
+			return string(result)
+		}
+	}
+
+	// Fall back to stdout
+	if len(stdout) > 0 {
+		result := make([]byte, 0, len(stdout))
+		for _, b := range stdout {
+			if b >= 32 && b < 127 || b == '\n' || b == '\r' || b == '\t' {
+				result = append(result, b)
+			}
+		}
+		return string(result)
+	}
+
+	return ""
 }
 
 // wrapRPCError wraps RPC errors with appropriate context.

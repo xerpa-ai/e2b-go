@@ -149,8 +149,14 @@ func New(opts ...Option) (*Sandbox, error) {
 	return sandbox, nil
 }
 
-// waitForReady waits for the sandbox's Jupyter server to be ready.
+// waitForReady waits for the sandbox to be ready.
+// If skipJupyterWait is true, it waits for the envd service instead of the Jupyter server.
 func (s *Sandbox) waitForReady() error {
+	// If skipping Jupyter wait, wait for the envd service instead
+	if s.config.skipJupyterWait {
+		return s.waitForEnvd()
+	}
+
 	maxRetries := 30
 	retryInterval := 1 * time.Second
 
@@ -175,6 +181,35 @@ func (s *Sandbox) waitForReady() error {
 
 	return fmt.Errorf("timeout waiting for Jupyter server (sandbox=%s, domain=%s, url=%s): %v",
 		s.ID, s.Domain, s.GetHost(JupyterPort), lastErr)
+}
+
+// waitForEnvd waits for the envd service to be ready.
+// This is used when skipJupyterWait is true.
+func (s *Sandbox) waitForEnvd() error {
+	maxRetries := 30
+	retryInterval := 1 * time.Second
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		// Try to list processes - this is a lightweight operation that
+		// will succeed when the envd service is ready
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := s.Commands.List(ctx)
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		// If the error indicates the port is not ready, wait and retry
+		if i < maxRetries-1 {
+			time.Sleep(retryInterval)
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for envd service (sandbox=%s, domain=%s, url=%s): %v",
+		s.ID, s.Domain, s.GetHost(EnvdPort), lastErr)
 }
 
 // createSandbox calls the E2B API to create a new sandbox.

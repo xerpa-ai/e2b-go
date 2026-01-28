@@ -154,6 +154,22 @@ func (h *CommandHandle) Stderr() string {
 	return h.stderr.String()
 }
 
+// appendStdout appends data to the stdout buffer.
+// This is used for handling early data received before the start event.
+func (h *CommandHandle) appendStdout(data string) {
+	h.mu.Lock()
+	h.stdout.WriteString(data)
+	h.mu.Unlock()
+}
+
+// appendStderr appends data to the stderr buffer.
+// This is used for handling early data received before the start event.
+func (h *CommandHandle) appendStderr(data string) {
+	h.mu.Lock()
+	h.stderr.WriteString(data)
+	h.mu.Unlock()
+}
+
 // Error returns the error message from command execution, if any.
 // Returns empty string if the command is still running or finished successfully.
 func (h *CommandHandle) Error() string {

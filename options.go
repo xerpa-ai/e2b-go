@@ -16,6 +16,7 @@ type sandboxConfig struct {
 	secure          bool
 	metadata        map[string]string
 	envVars         map[string]string
+	skipJupyterWait bool
 }
 
 // defaultSandboxConfig returns the default sandbox configuration.
@@ -93,6 +94,15 @@ func WithMetadata(metadata map[string]string) Option {
 func WithEnvVars(envVars map[string]string) Option {
 	return func(c *sandboxConfig) {
 		c.envVars = envVars
+	}
+}
+
+// WithSkipJupyterWait skips waiting for the Jupyter server to be ready.
+// Use this option when using templates that don't include a Jupyter server,
+// such as the "base" template, and you only need Commands or Filesystem operations.
+func WithSkipJupyterWait(skip bool) Option {
+	return func(c *sandboxConfig) {
+		c.skipJupyterWait = skip
 	}
 }
 

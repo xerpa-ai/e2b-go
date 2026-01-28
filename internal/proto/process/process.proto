@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package process;
+
+option go_package = "github.com/xerpa-ai/e2b-go/internal/proto/process;processpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ProcessConfig contains configuration for starting a process
+message ProcessConfig {
+  // Command to run
+  string cmd = 1;
+  // Arguments to the command
+  repeated string args = 2;
+  // Environment variables
+  map<string, string> envs = 3;
+  // Working directory
+  string cwd = 4;
+}
+
+// StartRequest is the request to start a new process
+message StartRequest {
+  ProcessConfig config = 1;
+}
+
+// StartResponse is the response from starting a process
+message StartResponse {
+  uint32 pid = 1;
+}
+
+// ProcessEvent represents an event from a running process
+message ProcessEvent {
+  oneof event {
+    DataEvent data = 1;
+    EndEvent end = 2;
+    StartEvent start = 3;
+    KeepAlive keepalive = 4;
+  }
+
+  message DataEvent {
+    bytes stdout = 1;
+    bytes stderr = 2;
+  }
+
+  message EndEvent {
+    bool exited = 1;
+    optional int32 exit_code = 2;
+    bool killed = 3;
+    optional int32 signal = 4;
+    string error = 5;
+  }
+
+  message StartEvent {
+    uint32 pid = 1;
+  }
+
+  message KeepAlive {}
+}
+
+// StreamInputRequest is a request to send input to a process
+message StreamInputRequest {
+  uint32 pid = 1;
+  bytes stdin = 2;
+}
+
+// StreamInputResponse is the response from sending input
+message StreamInputResponse {}
+
+// KillRequest is a request to kill a process
+message KillRequest {
+  uint32 pid = 1;
+  // Signal to send (default SIGKILL = 9)
+  optional int32 signal = 2;
+}
+
+// KillResponse is the response from killing a process
+message KillResponse {
+  bool killed = 1;
+}
+
+// ConnectRequest is a request to connect to a running process
+message ConnectRequest {
+  uint32 pid = 1;
+}
+
+// ListRequest is a request to list running processes
+message ListRequest {}
+
+// ProcessInfo contains information about a running process
+message ProcessInfo {
+  uint32 pid = 1;
+  string cmd = 2;
+  repeated string args = 3;
+  map<string, string> envs = 4;
+  string cwd = 5;
+}
+
+// ListResponse is the response from listing processes
+message ListResponse {
+  repeated ProcessInfo processes = 1;
+}
+
+// Process service provides process management operations
+service Process {
+  // Start starts a new process and streams its output
+  rpc Start(StartRequest) returns (stream ProcessEvent);
+  
+  // Connect connects to an already running process
+  rpc Connect(ConnectRequest) returns (stream ProcessEvent);
+  
+  // StreamInput sends input to a process's stdin
+  rpc StreamInput(StreamInputRequest) returns (StreamInputResponse);
+  
+  // Kill terminates a process
+  rpc Kill(KillRequest) returns (KillResponse);
+  
+  // List lists all running processes
+  rpc List(ListRequest) returns (ListResponse);
+}

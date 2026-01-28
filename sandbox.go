@@ -32,6 +32,9 @@ type Sandbox struct {
 	// Files provides filesystem operations for the sandbox.
 	Files *Filesystem
 
+	// Commands provides command execution operations for the sandbox.
+	Commands *Commands
+
 	mu           sync.RWMutex
 	config       *sandboxConfig
 	httpClient   *httpClient
@@ -133,6 +136,9 @@ func New(opts ...Option) (*Sandbox, error) {
 
 	// Initialize the Filesystem
 	sandbox.Files = newFilesystem(sandbox)
+
+	// Initialize the Commands
+	sandbox.Commands = newCommands(sandbox)
 
 	if err := sandbox.waitForReady(); err != nil {
 		// Clean up if the sandbox fails to become ready
@@ -256,6 +262,9 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 
 	// Initialize the Filesystem
 	sandbox.Files = newFilesystem(sandbox)
+
+	// Initialize the Commands
+	sandbox.Commands = newCommands(sandbox)
 
 	return sandbox, nil
 }

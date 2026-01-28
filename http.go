@@ -73,6 +73,7 @@ func newHTTPClient(client *http.Client, baseURL, accessToken, trafficToken strin
 // setHeaders sets common headers for all requests.
 func (c *httpClient) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "e2b-go-sdk/"+Version)
 	if c.accessToken != "" {
 		req.Header.Set("X-Access-Token", c.accessToken)
 	}

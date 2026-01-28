@@ -40,12 +40,7 @@ type Filesystem struct {
 
 // newFilesystem creates a new Filesystem instance.
 func newFilesystem(sandbox *Sandbox) *Filesystem {
-	scheme := "https"
-	if sandbox.config.debug {
-		scheme = "http"
-	}
-
-	envdBaseURL := fmt.Sprintf("%s://%d-%s.%s", scheme, EnvdPort, sandbox.ID, sandbox.Domain)
+	envdBaseURL := sandbox.getEnvdURL()
 
 	// Create HTTP client for file operations
 	httpClient := sandbox.config.httpClient
@@ -67,7 +62,7 @@ func newFilesystem(sandbox *Sandbox) *Filesystem {
 		envdBaseURL:  envdBaseURL,
 		rpcClient:    rpcClient,
 		accessToken:  sandbox.accessToken,
-		trafficToken: sandbox.trafficToken,
+		trafficToken: sandbox.TrafficAccessToken,
 		sandbox:      sandbox,
 	}
 }
@@ -103,12 +98,19 @@ func (fs *Filesystem) setHTTPHeaders(req *http.Request) {
 
 // setRPCHeaders sets authentication headers on the Connect request.
 func (fs *Filesystem) setRPCHeaders(req connect.AnyRequest) {
+	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
 	if fs.accessToken != "" {
 		req.Header().Set(headerAccessToken, fs.accessToken)
 	}
 	if fs.trafficToken != "" {
 		req.Header().Set(headerTrafficToken, fs.trafficToken)
 	}
+}
+
+// setStreamingHeaders sets headers for streaming requests including keepalive.
+func (fs *Filesystem) setStreamingHeaders(req connect.AnyRequest) {
+	fs.setRPCHeaders(req)
+	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
 // applyTimeout applies the appropriate timeout to the context.

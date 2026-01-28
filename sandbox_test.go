@@ -128,11 +128,11 @@ func TestExecutionText(t *testing.T) {
 
 func TestResultFormats(t *testing.T) {
 	result := &Result{
-		Text:     "text",
-		HTML:     "<p>html</p>",
-		PNG:      "base64png",
-		JSON:     map[string]any{"key": "value"},
-		Extra:    map[string]any{"custom": "data"},
+		Text:  "text",
+		HTML:  "<p>html</p>",
+		PNG:   "base64png",
+		JSON:  map[string]any{"key": "value"},
+		Extra: map[string]any{"custom": "data"},
 	}
 
 	formats := result.Formats()
@@ -388,16 +388,20 @@ func TestHTTPClient(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	if DefaultTemplate != "code-interpreter-v1" {
-		t.Errorf("DefaultTemplate = %v, want code-interpreter-v1", DefaultTemplate)
+	if DefaultTemplate != "base" {
+		t.Errorf("DefaultTemplate = %v, want base", DefaultTemplate)
 	}
 
 	if JupyterPort != 49999 {
 		t.Errorf("JupyterPort = %d, want 49999", JupyterPort)
 	}
 
-	if DefaultTimeout != 300*time.Second {
-		t.Errorf("DefaultTimeout = %v, want 300s", DefaultTimeout)
+	if DefaultSandboxTimeout != 300*time.Second {
+		t.Errorf("DefaultSandboxTimeout = %v, want 300s", DefaultSandboxTimeout)
+	}
+
+	if DefaultCodeExecutionTimeout != 60*time.Second {
+		t.Errorf("DefaultCodeExecutionTimeout = %v, want 60s", DefaultCodeExecutionTimeout)
 	}
 }
 

@@ -90,7 +90,7 @@ func (fs *Filesystem) WatchDir(
 		Path:      path,
 		Recursive: cfg.recursive,
 	})
-	fs.setRPCHeaders(req)
+	fs.setStreamingHeaders(req)
 
 	// Start streaming - use the watch context directly
 	// The stream will remain open until explicitly cancelled

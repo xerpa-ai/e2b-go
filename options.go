@@ -7,25 +7,32 @@ import (
 
 // sandboxConfig holds configuration for creating a Sandbox.
 type sandboxConfig struct {
-	apiKey          string
-	template        string
-	timeout         time.Duration
-	requestTimeout  time.Duration
-	httpClient      *http.Client
-	debug           bool
-	secure          bool
-	metadata        map[string]string
-	envVars         map[string]string
-	skipJupyterWait bool
+	apiKey              string
+	accessToken         string
+	domain              string
+	apiURL              string
+	sandboxURL          string
+	template            string
+	timeoutMs           time.Duration
+	requestTimeout      time.Duration
+	httpClient          *http.Client
+	debug               bool
+	secure              bool
+	allowInternetAccess bool
+	autoPause           bool
+	metadata            map[string]string
+	envVars             map[string]string
 }
 
 // defaultSandboxConfig returns the default sandbox configuration.
 func defaultSandboxConfig() *sandboxConfig {
 	return &sandboxConfig{
-		template:       DefaultTemplate,
-		timeout:        DefaultTimeout,
-		requestTimeout: DefaultRequestTimeout,
-		secure:         true, // Enable secure mode by default for filesystem access
+		domain:              DefaultDomain,
+		template:            DefaultTemplate,
+		timeoutMs:           DefaultSandboxTimeout,
+		requestTimeout:      DefaultRequestTimeout,
+		secure:              true, // Enable secure mode by default for filesystem access
+		allowInternetAccess: true, // Allow internet access by default
 	}
 }
 
@@ -33,9 +40,44 @@ func defaultSandboxConfig() *sandboxConfig {
 type Option func(*sandboxConfig)
 
 // WithAPIKey sets the E2B API key.
+// Defaults to E2B_API_KEY environment variable.
 func WithAPIKey(key string) Option {
 	return func(c *sandboxConfig) {
 		c.apiKey = key
+	}
+}
+
+// WithAccessToken sets the E2B access token.
+// Defaults to E2B_ACCESS_TOKEN environment variable.
+func WithAccessToken(token string) Option {
+	return func(c *sandboxConfig) {
+		c.accessToken = token
+	}
+}
+
+// WithDomain sets the E2B domain.
+// Defaults to E2B_DOMAIN environment variable or "e2b.app".
+func WithDomain(domain string) Option {
+	return func(c *sandboxConfig) {
+		c.domain = domain
+	}
+}
+
+// WithAPIURL sets the E2B API URL.
+// Defaults to E2B_API_URL environment variable or "https://api.{domain}".
+// This is primarily used for internal development.
+func WithAPIURL(url string) Option {
+	return func(c *sandboxConfig) {
+		c.apiURL = url
+	}
+}
+
+// WithSandboxURL sets the sandbox connection URL.
+// Defaults to E2B_SANDBOX_URL environment variable or "https://{port}-{sandboxID}.{domain}".
+// This is primarily used for internal development.
+func WithSandboxURL(url string) Option {
+	return func(c *sandboxConfig) {
+		c.sandboxURL = url
 	}
 }
 
@@ -46,14 +88,18 @@ func WithTemplate(template string) Option {
 	}
 }
 
-// WithTimeout sets the default timeout for code execution.
+// WithTimeout sets the sandbox lifetime timeout.
+// Maximum time a sandbox can be kept alive is 24 hours for Pro users
+// and 1 hour for Hobby users.
+// Defaults to 5 minutes.
 func WithTimeout(d time.Duration) Option {
 	return func(c *sandboxConfig) {
-		c.timeout = d
+		c.timeoutMs = d
 	}
 }
 
 // WithRequestTimeout sets the default timeout for HTTP requests.
+// Defaults to 60 seconds.
 func WithRequestTimeout(d time.Duration) Option {
 	return func(c *sandboxConfig) {
 		c.requestTimeout = d
@@ -68,6 +114,7 @@ func WithHTTPClient(client *http.Client) Option {
 }
 
 // WithDebug enables debug mode (uses HTTP instead of HTTPS).
+// Defaults to E2B_DEBUG environment variable or false.
 func WithDebug(debug bool) Option {
 	return func(c *sandboxConfig) {
 		c.debug = debug
@@ -75,11 +122,28 @@ func WithDebug(debug bool) Option {
 }
 
 // WithSecure enables secure mode for the sandbox.
-// When enabled, the sandbox requires authentication tokens for filesystem access.
+// When enabled, the sandbox requires authentication tokens for traffic access.
 // This is enabled by default.
 func WithSecure(secure bool) Option {
 	return func(c *sandboxConfig) {
 		c.secure = secure
+	}
+}
+
+// WithAllowInternetAccess enables or disables internet access for the sandbox.
+// This is enabled by default.
+func WithAllowInternetAccess(allow bool) Option {
+	return func(c *sandboxConfig) {
+		c.allowInternetAccess = allow
+	}
+}
+
+// WithAutoPause enables automatic pausing of the sandbox after the timeout.
+// When enabled, the sandbox will be paused instead of killed after timeout.
+// Defaults to false.
+func WithAutoPause(autoPause bool) Option {
+	return func(c *sandboxConfig) {
+		c.autoPause = autoPause
 	}
 }
 
@@ -91,18 +155,10 @@ func WithMetadata(metadata map[string]string) Option {
 }
 
 // WithEnvVars sets default environment variables for the sandbox.
+// These can be overridden when executing commands or code.
 func WithEnvVars(envVars map[string]string) Option {
 	return func(c *sandboxConfig) {
 		c.envVars = envVars
-	}
-}
-
-// WithSkipJupyterWait skips waiting for the Jupyter server to be ready.
-// Use this option when using templates that don't include a Jupyter server,
-// such as the "base" template, and you only need Commands or Filesystem operations.
-func WithSkipJupyterWait(skip bool) Option {
-	return func(c *sandboxConfig) {
-		c.skipJupyterWait = skip
 	}
 }
 

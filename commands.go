@@ -23,12 +23,7 @@ type Commands struct {
 
 // newCommands creates a new Commands instance.
 func newCommands(sandbox *Sandbox) *Commands {
-	scheme := "https"
-	if sandbox.config.debug {
-		scheme = "http"
-	}
-
-	envdBaseURL := fmt.Sprintf("%s://%d-%s.%s", scheme, EnvdPort, sandbox.ID, sandbox.Domain)
+	envdBaseURL := sandbox.getEnvdURL()
 
 	httpClient := sandbox.config.httpClient
 	if httpClient == nil {
@@ -48,19 +43,26 @@ func newCommands(sandbox *Sandbox) *Commands {
 		httpClient:   httpClient,
 		envdBaseURL:  envdBaseURL,
 		accessToken:  sandbox.accessToken,
-		trafficToken: sandbox.trafficToken,
+		trafficToken: sandbox.TrafficAccessToken,
 		sandbox:      sandbox,
 	}
 }
 
 // setRPCHeaders sets authentication headers on the Connect request.
 func (c *Commands) setRPCHeaders(req connect.AnyRequest) {
+	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
 	if c.accessToken != "" {
 		req.Header().Set(headerAccessToken, c.accessToken)
 	}
 	if c.trafficToken != "" {
 		req.Header().Set(headerTrafficToken, c.trafficToken)
 	}
+}
+
+// setStreamingHeaders sets headers for streaming requests including keepalive.
+func (c *Commands) setStreamingHeaders(req connect.AnyRequest) {
+	c.setRPCHeaders(req)
+	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
 // applyTimeout applies the appropriate timeout to the context.
@@ -235,7 +237,7 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 	req := connect.NewRequest(&processpb.StartRequest{
 		Config: processConfig,
 	})
-	c.setRPCHeaders(req)
+	c.setStreamingHeaders(req)
 
 	// Set user header for authentication
 	if cfg.user != "" {
@@ -416,7 +418,7 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 	req := connect.NewRequest(&processpb.ConnectRequest{
 		Pid: pid,
 	})
-	c.setRPCHeaders(req)
+	c.setStreamingHeaders(req)
 
 	// Create context with timeout for the stream
 	var streamCtx context.Context

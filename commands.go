@@ -2,6 +2,7 @@ package e2b
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	processpb "github.com/xerpa-ai/e2b-go/internal/proto/process"
 	"github.com/xerpa-ai/e2b-go/internal/proto/process/processpbconnect"
+	"golang.org/x/mod/semver"
 )
 
 // Commands provides methods for executing commands in the sandbox.
@@ -52,6 +54,11 @@ func newCommands(sandbox *Sandbox) *Commands {
 
 // setRPCHeaders sets authentication headers on the Connect request.
 func (c *Commands) setRPCHeaders(req connect.AnyRequest) {
+	c.setRPCHeadersWithUser(req, "")
+}
+
+// setRPCHeadersWithUser sets authentication headers including user-based Basic auth.
+func (c *Commands) setRPCHeadersWithUser(req connect.AnyRequest, user string) {
 	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
 	if c.accessToken != "" {
 		req.Header().Set(headerAccessToken, c.accessToken)
@@ -59,11 +66,43 @@ func (c *Commands) setRPCHeaders(req connect.AnyRequest) {
 	if c.trafficToken != "" {
 		req.Header().Set(headerTrafficToken, c.trafficToken)
 	}
+
+	// Set Authorization header with Basic auth (username:)
+	// If user is not specified and envd version < 0.4.0, default to "user"
+	effectiveUser := user
+	if effectiveUser == "" && c.compareVersion(EnvdVersionDefaultUser) < 0 {
+		effectiveUser = "user"
+	}
+
+	if effectiveUser != "" {
+		encoded := base64.StdEncoding.EncodeToString([]byte(effectiveUser + ":"))
+		req.Header().Set("Authorization", "Basic "+encoded)
+	}
+}
+
+// compareVersion compares the envd version with the given version.
+// Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
+func (c *Commands) compareVersion(version string) int {
+	// Add "v" prefix for semver comparison if not present
+	v1 := c.envdVersion
+	if v1 != "" && v1[0] != 'v' {
+		v1 = "v" + v1
+	}
+	v2 := version
+	if v2 != "" && v2[0] != 'v' {
+		v2 = "v" + v2
+	}
+	return semver.Compare(v1, v2)
 }
 
 // setStreamingHeaders sets headers for streaming requests including keepalive.
 func (c *Commands) setStreamingHeaders(req connect.AnyRequest) {
-	c.setRPCHeaders(req)
+	c.setStreamingHeadersWithUser(req, "")
+}
+
+// setStreamingHeadersWithUser sets headers for streaming requests with user-based auth.
+func (c *Commands) setStreamingHeadersWithUser(req connect.AnyRequest, user string) {
+	c.setRPCHeadersWithUser(req, user)
 	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
@@ -258,12 +297,7 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		Stdin:   &cfg.stdin,
 		Tag:     cfg.tag,
 	})
-	c.setStreamingHeaders(req)
-
-	// Set user header for authentication
-	if cfg.user != "" {
-		req.Header().Set("User", cfg.user)
-	}
+	c.setStreamingHeadersWithUser(req, cfg.user)
 
 	// Create context with timeout for the stream
 	var streamCtx context.Context

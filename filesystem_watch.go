@@ -82,6 +82,12 @@ func (fs *Filesystem) WatchDir(
 		opt(cfg)
 	}
 
+	// Check if recursive watch is supported
+	if cfg.recursive && fs.compareVersion(EnvdVersionRecursiveWatch) < 0 {
+		return nil, fmt.Errorf("%w: recursive watch requires envd version >= %s (current: %s)",
+			ErrInvalidArgument, EnvdVersionRecursiveWatch, fs.envdVersion)
+	}
+
 	// Create cancellable context for the entire watch operation
 	watchCtx, cancel := context.WithCancel(ctx)
 
@@ -90,7 +96,7 @@ func (fs *Filesystem) WatchDir(
 		Path:      path,
 		Recursive: cfg.recursive,
 	})
-	fs.setStreamingHeaders(req)
+	fs.setStreamingHeadersWithUser(req, cfg.user)
 
 	// Start streaming - use the watch context directly
 	// The stream will remain open until explicitly cancelled
@@ -179,6 +185,12 @@ func (fs *Filesystem) CreateWatcher(ctx context.Context, path string, opts ...Wa
 		opt(cfg)
 	}
 
+	// Check if recursive watch is supported
+	if cfg.recursive && fs.compareVersion(EnvdVersionRecursiveWatch) < 0 {
+		return "", fmt.Errorf("%w: recursive watch requires envd version >= %s (current: %s)",
+			ErrInvalidArgument, EnvdVersionRecursiveWatch, fs.envdVersion)
+	}
+
 	ctx, cancel := fs.applyTimeout(ctx, cfg.requestTimeout)
 	defer cancel()
 
@@ -186,7 +198,7 @@ func (fs *Filesystem) CreateWatcher(ctx context.Context, path string, opts ...Wa
 		Path:      path,
 		Recursive: cfg.recursive,
 	})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	resp, err := fs.rpcClient.CreateWatcher(ctx, req)
 	if err != nil {
@@ -219,7 +231,7 @@ func (fs *Filesystem) GetWatcherEvents(ctx context.Context, watcherID string, op
 	req := connect.NewRequest(&filesystempb.GetWatcherEventsRequest{
 		WatcherId: watcherID,
 	})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	resp, err := fs.rpcClient.GetWatcherEvents(ctx, req)
 	if err != nil {
@@ -253,7 +265,7 @@ func (fs *Filesystem) RemoveWatcher(ctx context.Context, watcherID string, opts 
 	req := connect.NewRequest(&filesystempb.RemoveWatcherRequest{
 		WatcherId: watcherID,
 	})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	_, err := fs.rpcClient.RemoveWatcher(ctx, req)
 	if err != nil {

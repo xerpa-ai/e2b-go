@@ -48,10 +48,9 @@ type Chart interface {
 
 // BaseChart contains common fields for all chart types.
 type BaseChart struct {
-	Type     ChartType      `json:"type"`
-	Title    string         `json:"title"`
-	Elements []any          `json:"elements"`
-	RawData  map[string]any `json:"-"`
+	Type    ChartType      `json:"type"`
+	Title   string         `json:"title"`
+	RawData map[string]any `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -80,8 +79,8 @@ type Chart2D struct {
 
 // PointData represents a data series with labeled points.
 type PointData struct {
-	Label  string     `json:"label"`
-	Points []Point    `json:"points"`
+	Label  string  `json:"label"`
+	Points []Point `json:"points"`
 }
 
 // Point represents a single data point.
@@ -93,13 +92,13 @@ type Point struct {
 // PointChart contains fields for point-based charts (line, scatter).
 type PointChart struct {
 	Chart2D
-	XTicks      []any     `json:"x_ticks"`
-	XTickLabels []string  `json:"x_tick_labels"`
-	XScale      ScaleType `json:"x_scale"`
-	YTicks      []any     `json:"y_ticks"`
-	YTickLabels []string  `json:"y_tick_labels"`
-	YScale      ScaleType `json:"y_scale"`
-	Data        []PointData `json:"data"`
+	XTicks      []any       `json:"x_ticks"`
+	XTickLabels []string    `json:"x_tick_labels"`
+	XScale      ScaleType   `json:"x_scale"`
+	YTicks      []any       `json:"y_ticks"`
+	YTickLabels []string    `json:"y_tick_labels"`
+	YScale      ScaleType   `json:"y_scale"`
+	Elements    []PointData `json:"-"`
 }
 
 // LineChart represents a line chart.
@@ -126,13 +125,13 @@ func (c *ScatterChart) ChartType() ChartType {
 type BarData struct {
 	Label string `json:"label"`
 	Group string `json:"group"`
-	Value any    `json:"value"`
+	Value string `json:"value"`
 }
 
 // BarChart represents a bar chart.
 type BarChart struct {
 	Chart2D
-	Data []BarData `json:"data"`
+	Elements []BarData `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -150,7 +149,7 @@ type PieData struct {
 // PieChart represents a pie chart.
 type PieChart struct {
 	BaseChart
-	Data []PieData `json:"data"`
+	Elements []PieData `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -172,7 +171,7 @@ type BoxAndWhiskerData struct {
 // BoxAndWhiskerChart represents a box and whisker chart.
 type BoxAndWhiskerChart struct {
 	Chart2D
-	Data []BoxAndWhiskerData `json:"data"`
+	Elements []BoxAndWhiskerData `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -183,7 +182,7 @@ func (c *BoxAndWhiskerChart) ChartType() ChartType {
 // SuperChart represents a chart containing multiple sub-charts.
 type SuperChart struct {
 	BaseChart
-	SubCharts []Chart `json:"sub_charts"`
+	Elements []Chart `json:"-"`
 }
 
 // ChartType returns the chart type.
@@ -215,7 +214,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal line chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Data = parsePointData(data)
+		chart.Elements = parsePointData(data)
 		return &chart, nil
 
 	case ChartTypeScatter:
@@ -224,7 +223,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal scatter chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Data = parsePointData(data)
+		chart.Elements = parsePointData(data)
 		return &chart, nil
 
 	case ChartTypeBar:
@@ -233,7 +232,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal bar chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Data = parseBarData(data)
+		chart.Elements = parseBarData(data)
 		return &chart, nil
 
 	case ChartTypePie:
@@ -242,7 +241,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal pie chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Data = parsePieData(data)
+		chart.Elements = parsePieData(data)
 		return &chart, nil
 
 	case ChartTypeBoxAndWhisker:
@@ -251,7 +250,7 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal box and whisker chart: %w", err)
 		}
 		chart.RawData = data
-		chart.Data = parseBoxAndWhiskerData(data)
+		chart.Elements = parseBoxAndWhiskerData(data)
 		return &chart, nil
 
 	case ChartTypeSuperChart:
@@ -260,13 +259,13 @@ func DeserializeChart(data map[string]any) (Chart, error) {
 			return nil, fmt.Errorf("failed to unmarshal super chart: %w", err)
 		}
 		chart.RawData = data
-		// Parse sub-charts
+		// Parse sub-charts from elements
 		if elements, ok := data["elements"].([]any); ok {
 			for _, elem := range elements {
 				if elemMap, ok := elem.(map[string]any); ok {
 					subChart, err := DeserializeChart(elemMap)
 					if err == nil && subChart != nil {
-						chart.SubCharts = append(chart.SubCharts, subChart)
+						chart.Elements = append(chart.Elements, subChart)
 					}
 				}
 			}
@@ -336,7 +335,7 @@ func parseBarData(data map[string]any) []BarData {
 		bd := BarData{
 			Label: getString(elemMap, "label"),
 			Group: getString(elemMap, "group"),
-			Value: elemMap["value"],
+			Value: getStringOrNumber(elemMap, "value"),
 		}
 
 		result = append(result, bd)
@@ -416,6 +415,24 @@ func getString(m map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+// getStringOrNumber extracts a value as string, converting numbers if needed.
+func getStringOrNumber(m map[string]any, key string) string {
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		return fmt.Sprintf("%v", val)
+	case int:
+		return fmt.Sprintf("%d", val)
+	default:
+		return fmt.Sprintf("%v", val)
+	}
 }
 
 // getFloat safely extracts a float64 from a map.

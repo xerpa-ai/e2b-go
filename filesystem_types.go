@@ -177,6 +177,8 @@ const (
 	ReadFormatText ReadFormat = "text"
 	// ReadFormatBytes returns content as []byte.
 	ReadFormatBytes ReadFormat = "bytes"
+	// ReadFormatStream returns content as an io.ReadCloser for streaming.
+	ReadFormatStream ReadFormat = "stream"
 )
 
 // FileContent represents the content of a file in various formats.

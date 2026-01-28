@@ -50,16 +50,16 @@ func TestDeserializeLineChart(t *testing.T) {
 		t.Errorf("XLabel = %v, want X Axis", lineChart.XLabel)
 	}
 
-	if len(lineChart.Data) != 1 {
-		t.Fatalf("Data length = %d, want 1", len(lineChart.Data))
+	if len(lineChart.Elements) != 1 {
+		t.Fatalf("Elements length = %d, want 1", len(lineChart.Elements))
 	}
 
-	if lineChart.Data[0].Label != "Series 1" {
-		t.Errorf("Data[0].Label = %v, want Series 1", lineChart.Data[0].Label)
+	if lineChart.Elements[0].Label != "Series 1" {
+		t.Errorf("Elements[0].Label = %v, want Series 1", lineChart.Elements[0].Label)
 	}
 
-	if len(lineChart.Data[0].Points) != 3 {
-		t.Errorf("Data[0].Points length = %d, want 3", len(lineChart.Data[0].Points))
+	if len(lineChart.Elements[0].Points) != 3 {
+		t.Errorf("Elements[0].Points length = %d, want 3", len(lineChart.Elements[0].Points))
 	}
 }
 
@@ -97,16 +97,16 @@ func TestDeserializeBarChart(t *testing.T) {
 		t.Fatal("chart is not a BarChart")
 	}
 
-	if len(barChart.Data) != 2 {
-		t.Fatalf("Data length = %d, want 2", len(barChart.Data))
+	if len(barChart.Elements) != 2 {
+		t.Fatalf("Elements length = %d, want 2", len(barChart.Elements))
 	}
 
-	if barChart.Data[0].Label != "A" {
-		t.Errorf("Data[0].Label = %v, want A", barChart.Data[0].Label)
+	if barChart.Elements[0].Label != "A" {
+		t.Errorf("Elements[0].Label = %v, want A", barChart.Elements[0].Label)
 	}
 
-	if barChart.Data[0].Group != "Group 1" {
-		t.Errorf("Data[0].Group = %v, want Group 1", barChart.Data[0].Group)
+	if barChart.Elements[0].Group != "Group 1" {
+		t.Errorf("Elements[0].Group = %v, want Group 1", barChart.Elements[0].Group)
 	}
 }
 
@@ -142,16 +142,16 @@ func TestDeserializePieChart(t *testing.T) {
 		t.Fatal("chart is not a PieChart")
 	}
 
-	if len(pieChart.Data) != 2 {
-		t.Fatalf("Data length = %d, want 2", len(pieChart.Data))
+	if len(pieChart.Elements) != 2 {
+		t.Fatalf("Elements length = %d, want 2", len(pieChart.Elements))
 	}
 
-	if pieChart.Data[0].Label != "Slice 1" {
-		t.Errorf("Data[0].Label = %v, want Slice 1", pieChart.Data[0].Label)
+	if pieChart.Elements[0].Label != "Slice 1" {
+		t.Errorf("Elements[0].Label = %v, want Slice 1", pieChart.Elements[0].Label)
 	}
 
-	if pieChart.Data[0].Angle != 90.0 {
-		t.Errorf("Data[0].Angle = %v, want 90.0", pieChart.Data[0].Angle)
+	if pieChart.Elements[0].Angle != 90.0 {
+		t.Errorf("Elements[0].Angle = %v, want 90.0", pieChart.Elements[0].Angle)
 	}
 }
 
@@ -192,8 +192,8 @@ func TestDeserializeScatterChart(t *testing.T) {
 		t.Fatal("chart is not a ScatterChart")
 	}
 
-	if len(scatterChart.Data) != 1 {
-		t.Fatalf("Data length = %d, want 1", len(scatterChart.Data))
+	if len(scatterChart.Elements) != 1 {
+		t.Fatalf("Elements length = %d, want 1", len(scatterChart.Elements))
 	}
 }
 
@@ -230,16 +230,16 @@ func TestDeserializeBoxAndWhiskerChart(t *testing.T) {
 		t.Fatal("chart is not a BoxAndWhiskerChart")
 	}
 
-	if len(boxChart.Data) != 1 {
-		t.Fatalf("Data length = %d, want 1", len(boxChart.Data))
+	if len(boxChart.Elements) != 1 {
+		t.Fatalf("Elements length = %d, want 1", len(boxChart.Elements))
 	}
 
-	if boxChart.Data[0].Median != 3.0 {
-		t.Errorf("Data[0].Median = %v, want 3.0", boxChart.Data[0].Median)
+	if boxChart.Elements[0].Median != 3.0 {
+		t.Errorf("Elements[0].Median = %v, want 3.0", boxChart.Elements[0].Median)
 	}
 
-	if len(boxChart.Data[0].Outliers) != 2 {
-		t.Errorf("Data[0].Outliers length = %d, want 2", len(boxChart.Data[0].Outliers))
+	if len(boxChart.Elements[0].Outliers) != 2 {
+		t.Errorf("Elements[0].Outliers length = %d, want 2", len(boxChart.Elements[0].Outliers))
 	}
 }
 
@@ -283,16 +283,16 @@ func TestDeserializeSuperChart(t *testing.T) {
 		t.Fatal("chart is not a SuperChart")
 	}
 
-	if len(superChart.SubCharts) != 2 {
-		t.Fatalf("SubCharts length = %d, want 2", len(superChart.SubCharts))
+	if len(superChart.Elements) != 2 {
+		t.Fatalf("Elements length = %d, want 2", len(superChart.Elements))
 	}
 
-	if superChart.SubCharts[0].ChartType() != ChartTypeLine {
-		t.Errorf("SubCharts[0].ChartType() = %v, want line", superChart.SubCharts[0].ChartType())
+	if superChart.Elements[0].ChartType() != ChartTypeLine {
+		t.Errorf("Elements[0].ChartType() = %v, want line", superChart.Elements[0].ChartType())
 	}
 
-	if superChart.SubCharts[1].ChartType() != ChartTypeBar {
-		t.Errorf("SubCharts[1].ChartType() = %v, want bar", superChart.SubCharts[1].ChartType())
+	if superChart.Elements[1].ChartType() != ChartTypeBar {
+		t.Errorf("Elements[1].ChartType() = %v, want bar", superChart.Elements[1].ChartType())
 	}
 }
 

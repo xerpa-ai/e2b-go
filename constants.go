@@ -37,6 +37,14 @@ const (
 
 	// DebugSandboxID is the sandbox ID used in debug mode.
 	DebugSandboxID = "debug_sandbox_id"
+
+	// EnvdVersionDefaultUser is the envd version that supports default user.
+	// Below this version, user defaults to "user" if not specified.
+	EnvdVersionDefaultUser = "0.4.0"
+
+	// EnvdVersionRecursiveWatch is the envd version that supports recursive watch.
+	// Below this version, recursive watch is not supported.
+	EnvdVersionRecursiveWatch = "0.1.4"
 )
 
 // Language constants for code execution.

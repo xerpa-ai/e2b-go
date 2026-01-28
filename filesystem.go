@@ -3,6 +3,7 @@ package e2b
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	filesystempb "github.com/xerpa-ai/e2b-go/internal/proto/filesystem"
 	"github.com/xerpa-ai/e2b-go/internal/proto/filesystem/filesystempbconnect"
+	"golang.org/x/mod/semver"
 )
 
 // EnvdPort is the port for the envd service.
@@ -36,6 +38,7 @@ type Filesystem struct {
 	accessToken  string
 	trafficToken string
 	sandbox      *Sandbox
+	envdVersion  string
 }
 
 // newFilesystem creates a new Filesystem instance.
@@ -64,6 +67,7 @@ func newFilesystem(sandbox *Sandbox) *Filesystem {
 		accessToken:  sandbox.accessToken,
 		trafficToken: sandbox.TrafficAccessToken,
 		sandbox:      sandbox,
+		envdVersion:  sandbox.envdVersion,
 	}
 }
 
@@ -98,6 +102,11 @@ func (fs *Filesystem) setHTTPHeaders(req *http.Request) {
 
 // setRPCHeaders sets authentication headers on the Connect request.
 func (fs *Filesystem) setRPCHeaders(req connect.AnyRequest) {
+	fs.setRPCHeadersWithUser(req, "")
+}
+
+// setRPCHeadersWithUser sets authentication headers including user-based Basic auth.
+func (fs *Filesystem) setRPCHeadersWithUser(req connect.AnyRequest, user string) {
 	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
 	if fs.accessToken != "" {
 		req.Header().Set(headerAccessToken, fs.accessToken)
@@ -105,11 +114,43 @@ func (fs *Filesystem) setRPCHeaders(req connect.AnyRequest) {
 	if fs.trafficToken != "" {
 		req.Header().Set(headerTrafficToken, fs.trafficToken)
 	}
+
+	// Set Authorization header with Basic auth (username:)
+	// If user is not specified and envd version < 0.4.0, default to "user"
+	effectiveUser := user
+	if effectiveUser == "" && fs.compareVersion(EnvdVersionDefaultUser) < 0 {
+		effectiveUser = "user"
+	}
+
+	if effectiveUser != "" {
+		encoded := base64.StdEncoding.EncodeToString([]byte(effectiveUser + ":"))
+		req.Header().Set("Authorization", "Basic "+encoded)
+	}
+}
+
+// compareVersion compares the envd version with the given version.
+// Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
+func (fs *Filesystem) compareVersion(version string) int {
+	// Add "v" prefix for semver comparison if not present
+	v1 := fs.envdVersion
+	if v1 != "" && v1[0] != 'v' {
+		v1 = "v" + v1
+	}
+	v2 := version
+	if v2 != "" && v2[0] != 'v' {
+		v2 = "v" + v2
+	}
+	return semver.Compare(v1, v2)
 }
 
 // setStreamingHeaders sets headers for streaming requests including keepalive.
 func (fs *Filesystem) setStreamingHeaders(req connect.AnyRequest) {
-	fs.setRPCHeaders(req)
+	fs.setStreamingHeadersWithUser(req, "")
+}
+
+// setStreamingHeadersWithUser sets headers for streaming requests with user-based auth.
+func (fs *Filesystem) setStreamingHeadersWithUser(req connect.AnyRequest, user string) {
+	fs.setRPCHeadersWithUser(req, user)
 	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
@@ -140,6 +181,86 @@ func (fs *Filesystem) Read(ctx context.Context, path string, opts ...ReadOption)
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ReadStream reads the content of a file as a stream.
+// The caller is responsible for closing the returned ReadCloser.
+//
+// Example:
+//
+//	stream, err := sandbox.Files.ReadStream(ctx, "/home/user/largefile.bin")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer stream.Close()
+//	// Process stream in chunks
+//	buf := make([]byte, 4096)
+//	for {
+//	    n, err := stream.Read(buf)
+//	    // ... process data
+//	}
+func (fs *Filesystem) ReadStream(ctx context.Context, path string, opts ...ReadOption) (io.ReadCloser, error) {
+	cfg := defaultReadConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	ctx, cancel := fs.applyTimeout(ctx, cfg.requestTimeout)
+
+	// Build URL
+	reqURL, err := fs.buildFileURL(path, cfg.user)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Create request
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	fs.setHTTPHeaders(req)
+
+	// Execute request
+	resp, err := fs.httpClient.Do(req)
+	if err != nil {
+		cancel()
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, NewRequestTimeoutError()
+		}
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	// Check status
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		cancel()
+		return nil, fs.handleHTTPError(resp.StatusCode, body)
+	}
+
+	// Return a wrapper that cancels context when closed
+	return &streamReadCloser{
+		body:   resp.Body,
+		cancel: cancel,
+	}, nil
+}
+
+// streamReadCloser wraps an io.ReadCloser and cancels the context when closed.
+type streamReadCloser struct {
+	body   io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (s *streamReadCloser) Read(p []byte) (n int, err error) {
+	return s.body.Read(p)
+}
+
+func (s *streamReadCloser) Close() error {
+	err := s.body.Close()
+	s.cancel()
+	return err
 }
 
 // ReadBytes reads the content of a file as bytes.
@@ -433,7 +554,7 @@ func (fs *Filesystem) List(ctx context.Context, path string, opts ...ListOption)
 		Path:  path,
 		Depth: cfg.depth,
 	})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	resp, err := fs.rpcClient.ListDir(ctx, req)
 	if err != nil {
@@ -468,7 +589,7 @@ func (fs *Filesystem) MakeDir(ctx context.Context, path string, opts ...Filesyst
 	defer cancel()
 
 	req := connect.NewRequest(&filesystempb.MakeDirRequest{Path: path})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	_, err := fs.rpcClient.MakeDir(ctx, req)
 	if err != nil {
@@ -496,7 +617,7 @@ func (fs *Filesystem) Remove(ctx context.Context, path string, opts ...Filesyste
 	defer cancel()
 
 	req := connect.NewRequest(&filesystempb.RemoveRequest{Path: path})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	_, err := fs.rpcClient.Remove(ctx, req)
 	if err != nil {
@@ -524,7 +645,7 @@ func (fs *Filesystem) Rename(ctx context.Context, oldPath, newPath string, opts 
 		Source:      oldPath,
 		Destination: newPath,
 	})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	resp, err := fs.rpcClient.Move(ctx, req)
 	if err != nil {
@@ -549,7 +670,7 @@ func (fs *Filesystem) Exists(ctx context.Context, path string, opts ...Filesyste
 	defer cancel()
 
 	req := connect.NewRequest(&filesystempb.StatRequest{Path: path})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	_, err := fs.rpcClient.Stat(ctx, req)
 	if err != nil {
@@ -578,7 +699,7 @@ func (fs *Filesystem) GetInfo(ctx context.Context, path string, opts ...Filesyst
 	defer cancel()
 
 	req := connect.NewRequest(&filesystempb.StatRequest{Path: path})
-	fs.setRPCHeaders(req)
+	fs.setRPCHeadersWithUser(req, cfg.user)
 
 	resp, err := fs.rpcClient.Stat(ctx, req)
 	if err != nil {

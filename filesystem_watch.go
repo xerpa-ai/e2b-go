@@ -100,7 +100,7 @@ func (fs *Filesystem) WatchDir(
 
 	// Start streaming - use the watch context directly
 	// The stream will remain open until explicitly cancelled
-	stream, err := fs.rpcClient.WatchDir(watchCtx, req)
+	stream, err := fs.filesystemClient.WatchDir(watchCtx, req)
 	if err != nil {
 		cancel()
 		return nil, fs.wrapRPCError(ctx, err)
@@ -200,7 +200,7 @@ func (fs *Filesystem) CreateWatcher(ctx context.Context, path string, opts ...Wa
 	})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	resp, err := fs.rpcClient.CreateWatcher(ctx, req)
+	resp, err := fs.filesystemClient.CreateWatcher(ctx, req)
 	if err != nil {
 		return "", fs.wrapRPCError(ctx, err)
 	}
@@ -233,7 +233,7 @@ func (fs *Filesystem) GetWatcherEvents(ctx context.Context, watcherID string, op
 	})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	resp, err := fs.rpcClient.GetWatcherEvents(ctx, req)
+	resp, err := fs.filesystemClient.GetWatcherEvents(ctx, req)
 	if err != nil {
 		return nil, fs.wrapRPCError(ctx, err)
 	}
@@ -267,7 +267,7 @@ func (fs *Filesystem) RemoveWatcher(ctx context.Context, watcherID string, opts 
 	})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	_, err := fs.rpcClient.RemoveWatcher(ctx, req)
+	_, err := fs.filesystemClient.RemoveWatcher(ctx, req)
 	if err != nil {
 		return fs.wrapRPCError(ctx, err)
 	}

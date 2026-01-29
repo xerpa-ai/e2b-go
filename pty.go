@@ -2,9 +2,7 @@ package e2b
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"net/http"
 	"time"
 
 	"connectrpc.com/connect"
@@ -20,85 +18,27 @@ type PtySize struct {
 
 // Pty provides methods for interacting with PTYs (pseudo-terminals) in the sandbox.
 type Pty struct {
-	rpcClient    processpbconnect.ProcessClient
-	httpClient   *http.Client
-	envdBaseURL  string
-	accessToken  string
-	trafficToken string
-	sandbox      *Sandbox
-	envdVersion  string
+	rpcClient
+
+	processClient processpbconnect.ProcessClient
+	sandbox       *Sandbox
 }
 
 // newPty creates a new Pty instance.
 func newPty(sandbox *Sandbox) *Pty {
-	envdBaseURL := sandbox.getEnvdURL()
+	base := newRPCClient(sandbox)
 
-	httpClient := sandbox.config.httpClient
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: sandbox.config.requestTimeout,
-		}
-	}
-
-	rpcClient := processpbconnect.NewProcessClient(
-		httpClient,
-		envdBaseURL,
+	processClient := processpbconnect.NewProcessClient(
+		base.httpClient,
+		base.envdBaseURL,
 		connect.WithGRPCWeb(),
 	)
 
 	return &Pty{
-		rpcClient:    rpcClient,
-		httpClient:   httpClient,
-		envdBaseURL:  envdBaseURL,
-		accessToken:  sandbox.accessToken,
-		trafficToken: sandbox.TrafficAccessToken,
-		sandbox:      sandbox,
-		envdVersion:  sandbox.envdVersion,
+		rpcClient:     base,
+		processClient: processClient,
+		sandbox:       sandbox,
 	}
-}
-
-// setRPCHeaders sets authentication headers on the Connect request.
-func (p *Pty) setRPCHeaders(req connect.AnyRequest) {
-	p.setRPCHeadersWithUser(req, "")
-}
-
-// setRPCHeadersWithUser sets authentication headers including user-based Basic auth.
-func (p *Pty) setRPCHeadersWithUser(req connect.AnyRequest, user string) {
-	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
-	if p.accessToken != "" {
-		req.Header().Set(headerAccessToken, p.accessToken)
-	}
-	if p.trafficToken != "" {
-		req.Header().Set(headerTrafficToken, p.trafficToken)
-	}
-
-	// Set Authorization header with Basic auth (username:)
-	// If user is not specified and envd version < 0.4.0, default to "user"
-	effectiveUser := user
-	if effectiveUser == "" && p.compareVersion(EnvdVersionDefaultUser) < 0 {
-		effectiveUser = "user"
-	}
-
-	if effectiveUser != "" {
-		encoded := base64.StdEncoding.EncodeToString([]byte(effectiveUser + ":"))
-		req.Header().Set("Authorization", "Basic "+encoded)
-	}
-}
-
-// compareVersion compares the envd version with the given version.
-func (p *Pty) compareVersion(version string) int {
-	return compareVersions(p.envdVersion, version)
-}
-
-// setStreamingHeaders sets headers for streaming requests including keepalive.
-func (p *Pty) setStreamingHeaders(req connect.AnyRequest) {
-	p.setStreamingHeadersWithUser(req, "")
-}
-
-// setStreamingHeadersWithUser sets headers for streaming requests with user-based auth.
-func (p *Pty) setStreamingHeadersWithUser(req connect.AnyRequest, user string) {
-	p.setRPCHeadersWithUser(req, user)
-	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
 // Create starts a new PTY (pseudo-terminal).
@@ -152,7 +92,7 @@ func (p *Pty) Create(ctx context.Context, size PtySize, opts ...PtyOption) (*Com
 
 	p.setStreamingHeadersWithUser(req, cfg.user)
 
-	stream, err := p.rpcClient.Start(ctx, req)
+	stream, err := p.processClient.Start(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PTY: %w", err)
 	}
@@ -215,7 +155,7 @@ func (p *Pty) Connect(ctx context.Context, pid uint32, opts ...PtyConnectOption)
 
 	p.setStreamingHeaders(req)
 
-	stream, err := p.rpcClient.Connect(ctx, req)
+	stream, err := p.processClient.Connect(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to PTY: %w", err)
 	}
@@ -270,7 +210,7 @@ func (p *Pty) Kill(ctx context.Context, pid uint32, opts ...PtyRequestOption) (b
 
 	p.setRPCHeaders(req)
 
-	_, err := p.rpcClient.SendSignal(ctx, req)
+	_, err := p.processClient.SendSignal(ctx, req)
 	if err != nil {
 		// Check if it's a not found error
 		if connect.CodeOf(err) == connect.CodeNotFound {
@@ -306,7 +246,7 @@ func (p *Pty) SendStdin(ctx context.Context, pid uint32, data []byte, opts ...Pt
 
 	p.setRPCHeaders(req)
 
-	_, err := p.rpcClient.SendInput(ctx, req)
+	_, err := p.processClient.SendInput(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to send input to PTY: %w", err)
 	}
@@ -338,7 +278,7 @@ func (p *Pty) Resize(ctx context.Context, pid uint32, size PtySize, opts ...PtyR
 
 	p.setRPCHeaders(req)
 
-	_, err := p.rpcClient.Update(ctx, req)
+	_, err := p.processClient.Update(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to resize PTY: %w", err)
 	}

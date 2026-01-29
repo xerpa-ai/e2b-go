@@ -105,5 +105,8 @@ type CommandExitError struct {
 
 // Error implements the error interface.
 func (e *CommandExitError) Error() string {
-	return fmt.Sprintf("command exited with code %d and error:\n%s", e.ExitCode, e.Stderr)
+	if e.Stderr != "" {
+		return fmt.Sprintf("command exited with code %d: %s", e.ExitCode, e.Stderr)
+	}
+	return fmt.Sprintf("command exited with code %d", e.ExitCode)
 }

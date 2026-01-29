@@ -41,9 +41,9 @@ type SandboxError struct {
 // Error implements the error interface.
 func (e *SandboxError) Error() string {
 	if e.Err != nil {
-		return fmt.Sprintf("e2b: %s (status %d): %v", e.Message, e.StatusCode, e.Err)
+		return fmt.Sprintf("sandbox error status %d, %s: %v", e.StatusCode, e.Message, e.Err)
 	}
-	return fmt.Sprintf("e2b: %s (status %d)", e.Message, e.StatusCode)
+	return fmt.Sprintf("sandbox error status %d, %s", e.StatusCode, e.Message)
 }
 
 // Unwrap returns the underlying error.
@@ -81,7 +81,10 @@ type TimeoutError struct {
 
 // Error implements the error interface.
 func (e *TimeoutError) Error() string {
-	return fmt.Sprintf("e2b: %s timeout exceeded (%s)", e.Type, e.Duration)
+	if e.Duration != "" {
+		return fmt.Sprintf("%s timeout exceeded after %s", e.Type, e.Duration)
+	}
+	return fmt.Sprintf("%s timeout exceeded", e.Type)
 }
 
 // Is checks if the error matches the target.

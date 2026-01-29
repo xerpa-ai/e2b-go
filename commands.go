@@ -2,9 +2,7 @@ package e2b
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"net/http"
 	"time"
 
 	"connectrpc.com/connect"
@@ -14,86 +12,27 @@ import (
 
 // Commands provides methods for executing commands in the sandbox.
 type Commands struct {
-	rpcClient    processpbconnect.ProcessClient
-	httpClient   *http.Client
-	envdBaseURL  string
-	accessToken  string
-	trafficToken string
-	sandbox      *Sandbox
-	envdVersion  string
+	rpcClient
+
+	processClient processpbconnect.ProcessClient
+	sandbox       *Sandbox
 }
 
 // newCommands creates a new Commands instance.
 func newCommands(sandbox *Sandbox) *Commands {
-	envdBaseURL := sandbox.getEnvdURL()
+	base := newRPCClient(sandbox)
 
-	httpClient := sandbox.config.httpClient
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: sandbox.config.requestTimeout,
-		}
-	}
-
-	rpcClient := processpbconnect.NewProcessClient(
-		httpClient,
-		envdBaseURL,
+	processClient := processpbconnect.NewProcessClient(
+		base.httpClient,
+		base.envdBaseURL,
 		connect.WithGRPCWeb(),
 	)
 
 	return &Commands{
-		rpcClient:    rpcClient,
-		httpClient:   httpClient,
-		envdBaseURL:  envdBaseURL,
-		accessToken:  sandbox.accessToken,
-		trafficToken: sandbox.TrafficAccessToken,
-		sandbox:      sandbox,
-		envdVersion:  sandbox.envdVersion,
+		rpcClient:     base,
+		processClient: processClient,
+		sandbox:       sandbox,
 	}
-}
-
-// setRPCHeaders sets authentication headers on the Connect request.
-func (c *Commands) setRPCHeaders(req connect.AnyRequest) {
-	c.setRPCHeadersWithUser(req, "")
-}
-
-// setRPCHeadersWithUser sets authentication headers including user-based Basic auth.
-func (c *Commands) setRPCHeadersWithUser(req connect.AnyRequest, user string) {
-	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
-	if c.accessToken != "" {
-		req.Header().Set(headerAccessToken, c.accessToken)
-	}
-	if c.trafficToken != "" {
-		req.Header().Set(headerTrafficToken, c.trafficToken)
-	}
-
-	// Set Authorization header with Basic auth (username:)
-	// If user is not specified and envd version < 0.4.0, default to "user"
-	effectiveUser := user
-	if effectiveUser == "" && c.compareVersion(EnvdVersionDefaultUser) < 0 {
-		effectiveUser = "user"
-	}
-
-	if effectiveUser != "" {
-		encoded := base64.StdEncoding.EncodeToString([]byte(effectiveUser + ":"))
-		req.Header().Set("Authorization", "Basic "+encoded)
-	}
-}
-
-// compareVersion compares the envd version with the given version.
-// Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
-func (c *Commands) compareVersion(version string) int {
-	return compareVersions(c.envdVersion, version)
-}
-
-// setStreamingHeaders sets headers for streaming requests including keepalive.
-func (c *Commands) setStreamingHeaders(req connect.AnyRequest) {
-	c.setStreamingHeadersWithUser(req, "")
-}
-
-// setStreamingHeadersWithUser sets headers for streaming requests with user-based auth.
-func (c *Commands) setStreamingHeadersWithUser(req connect.AnyRequest, user string) {
-	c.setRPCHeadersWithUser(req, user)
-	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
 // applyTimeout applies the appropriate timeout to the context.
@@ -128,7 +67,7 @@ func (c *Commands) List(ctx context.Context, opts ...CommandRequestOption) ([]*P
 	req := connect.NewRequest(&processpb.ListRequest{})
 	c.setRPCHeaders(req)
 
-	resp, err := c.rpcClient.List(ctx, req)
+	resp, err := c.processClient.List(ctx, req)
 	if err != nil {
 		return nil, c.wrapRPCError(ctx, err)
 	}
@@ -171,7 +110,7 @@ func (c *Commands) Kill(ctx context.Context, pid uint32, opts ...CommandRequestO
 	})
 	c.setRPCHeaders(req)
 
-	_, err := c.rpcClient.SendSignal(ctx, req)
+	_, err := c.processClient.SendSignal(ctx, req)
 	if err != nil {
 		// Check for not found error
 		if connectErr, ok := err.(*connect.Error); ok {
@@ -213,7 +152,7 @@ func (c *Commands) SendStdin(ctx context.Context, pid uint32, data string, opts 
 	})
 	c.setRPCHeaders(req)
 
-	_, err := c.rpcClient.SendInput(ctx, req)
+	_, err := c.processClient.SendInput(ctx, req)
 	if err != nil {
 		return c.wrapRPCError(ctx, err)
 	}
@@ -313,7 +252,7 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		streamCtx, streamCancel = context.WithCancel(ctx)
 	}
 
-	stream, err := c.rpcClient.Start(streamCtx, req)
+	stream, err := c.processClient.Start(streamCtx, req)
 	if err != nil {
 		streamCancel()
 		return nil, c.wrapRPCError(ctx, err)
@@ -491,7 +430,7 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 		streamCtx, streamCancel = context.WithCancel(ctx)
 	}
 
-	stream, err := c.rpcClient.Connect(streamCtx, req)
+	stream, err := c.processClient.Connect(streamCtx, req)
 	if err != nil {
 		streamCancel()
 		return nil, c.wrapRPCError(ctx, err)

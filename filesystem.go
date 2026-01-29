@@ -3,7 +3,6 @@ package e2b
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,42 +27,26 @@ const filesAPIPath = "/files"
 
 // Filesystem provides operations for interacting with the sandbox filesystem.
 type Filesystem struct {
-	httpClient   *http.Client
-	envdBaseURL  string
-	rpcClient    filesystempbconnect.FilesystemClient
-	accessToken  string
-	trafficToken string
-	sandbox      *Sandbox
-	envdVersion  string
+	rpcClient
+
+	filesystemClient filesystempbconnect.FilesystemClient
+	sandbox          *Sandbox
 }
 
 // newFilesystem creates a new Filesystem instance.
 func newFilesystem(sandbox *Sandbox) *Filesystem {
-	envdBaseURL := sandbox.getEnvdURL()
+	base := newRPCClient(sandbox)
 
-	// Create HTTP client for file operations
-	httpClient := sandbox.config.httpClient
-	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: sandbox.config.requestTimeout,
-		}
-	}
-
-	// Create RPC client for filesystem operations
-	rpcClient := filesystempbconnect.NewFilesystemClient(
-		httpClient,
-		envdBaseURL,
+	filesystemClient := filesystempbconnect.NewFilesystemClient(
+		base.httpClient,
+		base.envdBaseURL,
 		connect.WithGRPCWeb(),
 	)
 
 	return &Filesystem{
-		httpClient:   httpClient,
-		envdBaseURL:  envdBaseURL,
-		rpcClient:    rpcClient,
-		accessToken:  sandbox.accessToken,
-		trafficToken: sandbox.TrafficAccessToken,
-		sandbox:      sandbox,
-		envdVersion:  sandbox.envdVersion,
+		rpcClient:        base,
+		filesystemClient: filesystemClient,
+		sandbox:          sandbox,
 	}
 }
 
@@ -84,61 +67,6 @@ func (fs *Filesystem) buildFileURL(path, user string) (string, error) {
 	u.RawQuery = q.Encode()
 
 	return u.String(), nil
-}
-
-// setHTTPHeaders sets authentication headers on the HTTP request.
-func (fs *Filesystem) setHTTPHeaders(req *http.Request) {
-	if fs.accessToken != "" {
-		req.Header.Set(headerAccessToken, fs.accessToken)
-	}
-	if fs.trafficToken != "" {
-		req.Header.Set(headerTrafficToken, fs.trafficToken)
-	}
-}
-
-// setRPCHeaders sets authentication headers on the Connect request.
-func (fs *Filesystem) setRPCHeaders(req connect.AnyRequest) {
-	fs.setRPCHeadersWithUser(req, "")
-}
-
-// setRPCHeadersWithUser sets authentication headers including user-based Basic auth.
-func (fs *Filesystem) setRPCHeadersWithUser(req connect.AnyRequest, user string) {
-	req.Header().Set("User-Agent", "e2b-go-sdk/"+Version)
-	if fs.accessToken != "" {
-		req.Header().Set(headerAccessToken, fs.accessToken)
-	}
-	if fs.trafficToken != "" {
-		req.Header().Set(headerTrafficToken, fs.trafficToken)
-	}
-
-	// Set Authorization header with Basic auth (username:)
-	// If user is not specified and envd version < 0.4.0, default to "user"
-	effectiveUser := user
-	if effectiveUser == "" && fs.compareVersion(EnvdVersionDefaultUser) < 0 {
-		effectiveUser = "user"
-	}
-
-	if effectiveUser != "" {
-		encoded := base64.StdEncoding.EncodeToString([]byte(effectiveUser + ":"))
-		req.Header().Set("Authorization", "Basic "+encoded)
-	}
-}
-
-// compareVersion compares the envd version with the given version.
-// Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
-func (fs *Filesystem) compareVersion(version string) int {
-	return compareVersions(fs.envdVersion, version)
-}
-
-// setStreamingHeaders sets headers for streaming requests including keepalive.
-func (fs *Filesystem) setStreamingHeaders(req connect.AnyRequest) {
-	fs.setStreamingHeadersWithUser(req, "")
-}
-
-// setStreamingHeadersWithUser sets headers for streaming requests with user-based auth.
-func (fs *Filesystem) setStreamingHeadersWithUser(req connect.AnyRequest, user string) {
-	fs.setRPCHeadersWithUser(req, user)
-	req.Header().Set(KeepalivePingHeader, fmt.Sprintf("%d", KeepalivePingIntervalSec))
 }
 
 // applyTimeout applies the appropriate timeout to the context.
@@ -543,7 +471,7 @@ func (fs *Filesystem) List(ctx context.Context, path string, opts ...ListOption)
 	})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	resp, err := fs.rpcClient.ListDir(ctx, req)
+	resp, err := fs.filesystemClient.ListDir(ctx, req)
 	if err != nil {
 		return nil, fs.wrapRPCError(ctx, err)
 	}
@@ -578,7 +506,7 @@ func (fs *Filesystem) MakeDir(ctx context.Context, path string, opts ...Filesyst
 	req := connect.NewRequest(&filesystempb.MakeDirRequest{Path: path})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	_, err := fs.rpcClient.MakeDir(ctx, req)
+	_, err := fs.filesystemClient.MakeDir(ctx, req)
 	if err != nil {
 		if connectErr, ok := err.(*connect.Error); ok && connectErr.Code() == connect.CodeAlreadyExists {
 			return false, nil
@@ -606,7 +534,7 @@ func (fs *Filesystem) Remove(ctx context.Context, path string, opts ...Filesyste
 	req := connect.NewRequest(&filesystempb.RemoveRequest{Path: path})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	_, err := fs.rpcClient.Remove(ctx, req)
+	_, err := fs.filesystemClient.Remove(ctx, req)
 	if err != nil {
 		return fs.wrapRPCError(ctx, err)
 	}
@@ -634,7 +562,7 @@ func (fs *Filesystem) Rename(ctx context.Context, oldPath, newPath string, opts 
 	})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	resp, err := fs.rpcClient.Move(ctx, req)
+	resp, err := fs.filesystemClient.Move(ctx, req)
 	if err != nil {
 		return nil, fs.wrapRPCError(ctx, err)
 	}
@@ -659,7 +587,7 @@ func (fs *Filesystem) Exists(ctx context.Context, path string, opts ...Filesyste
 	req := connect.NewRequest(&filesystempb.StatRequest{Path: path})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	_, err := fs.rpcClient.Stat(ctx, req)
+	_, err := fs.filesystemClient.Stat(ctx, req)
 	if err != nil {
 		if connectErr, ok := err.(*connect.Error); ok && connectErr.Code() == connect.CodeNotFound {
 			return false, nil
@@ -688,7 +616,7 @@ func (fs *Filesystem) GetInfo(ctx context.Context, path string, opts ...Filesyst
 	req := connect.NewRequest(&filesystempb.StatRequest{Path: path})
 	fs.setRPCHeadersWithUser(req, cfg.user)
 
-	resp, err := fs.rpcClient.Stat(ctx, req)
+	resp, err := fs.filesystemClient.Stat(ctx, req)
 	if err != nil {
 		return nil, fs.wrapRPCError(ctx, err)
 	}

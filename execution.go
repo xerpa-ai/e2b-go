@@ -2,6 +2,7 @@ package e2b
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
 // Execution represents the result of a code cell execution.
@@ -53,7 +54,10 @@ type ExecutionError struct {
 
 // Error implements the error interface.
 func (e *ExecutionError) Error() string {
-	return e.Name + ": " + e.Value
+	if e.Value != "" {
+		return fmt.Sprintf("%s: %s", e.Name, e.Value)
+	}
+	return e.Name
 }
 
 // Logs represents stdout and stderr output from code execution.

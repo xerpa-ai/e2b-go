@@ -195,7 +195,7 @@ func TestSandboxError(t *testing.T) {
 			},
 			target:     ErrNotFound,
 			wantIs:     true,
-			wantString: "e2b: context not found (status 404)",
+			wantString: "sandbox error status 404, context not found",
 		},
 		{
 			name: "timeout error",
@@ -205,7 +205,7 @@ func TestSandboxError(t *testing.T) {
 			},
 			target:     ErrTimeout,
 			wantIs:     true,
-			wantString: "e2b: execution timeout (status 502)",
+			wantString: "sandbox error status 502, execution timeout",
 		},
 		{
 			name: "generic error",
@@ -215,7 +215,7 @@ func TestSandboxError(t *testing.T) {
 			},
 			target:     ErrNotFound,
 			wantIs:     false,
-			wantString: "e2b: internal error (status 500)",
+			wantString: "sandbox error status 500, internal error",
 		},
 	}
 

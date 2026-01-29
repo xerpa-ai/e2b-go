@@ -29,27 +29,29 @@ import (
 type Sandbox struct {
 	// ID is the unique identifier for this sandbox.
 	ID string
-
 	// Domain is the base domain for sandbox traffic.
 	Domain string
-
-	// Files provides filesystem operations for the sandbox.
-	Files *Filesystem
-
-	// Commands provides command execution operations for the sandbox.
-	Commands *Commands
-
-	// Pty provides pseudo-terminal operations for the sandbox.
-	Pty *Pty
-
 	// TrafficAccessToken is used for accessing sandbox services with restricted public traffic.
 	TrafficAccessToken string
 
-	mu          sync.RWMutex
-	config      *sandboxConfig
-	httpClient  *httpClient
-	closed      bool
+	// Files provides filesystem operations for the sandbox.
+	Files *Filesystem
+	// Commands provides command execution operations for the sandbox.
+	Commands *Commands
+	// Pty provides pseudo-terminal operations for the sandbox.
+	Pty *Pty
+
+	// mu protects concurrent access to sandbox state.
+	mu sync.RWMutex
+	// config holds the sandbox configuration.
+	config *sandboxConfig
+	// httpClient is used for API requests.
+	httpClient *httpClient
+	// closed indicates whether the sandbox has been closed.
+	closed bool
+	// accessToken is the envd access token.
 	accessToken string
+	// envdVersion is the version of the envd service.
 	envdVersion string
 }
 

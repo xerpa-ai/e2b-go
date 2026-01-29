@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -125,43 +124,10 @@ func New(opts ...Option) (*Sandbox, error) {
 		opt(cfg)
 	}
 
-	// Get configuration from environment variables if not provided
-	if cfg.apiKey == "" {
-		cfg.apiKey = os.Getenv("E2B_API_KEY")
-	}
-	if cfg.accessToken == "" {
-		cfg.accessToken = os.Getenv("E2B_ACCESS_TOKEN")
-	}
-	if cfg.domain == "" || cfg.domain == DefaultDomain {
-		if envDomain := os.Getenv("E2B_DOMAIN"); envDomain != "" {
-			cfg.domain = envDomain
-		}
-	}
-	if cfg.apiURL == "" {
-		cfg.apiURL = os.Getenv("E2B_API_URL")
-	}
-	if cfg.sandboxURL == "" {
-		cfg.sandboxURL = os.Getenv("E2B_SANDBOX_URL")
-	}
-	if !cfg.debug {
-		cfg.debug = os.Getenv("E2B_DEBUG") == "true"
-	}
-
-	// Compute API URL if not provided
-	if cfg.apiURL == "" {
-		if cfg.debug {
-			cfg.apiURL = "http://localhost:3000"
-		} else {
-			cfg.apiURL = fmt.Sprintf("https://api.%s", cfg.domain)
-		}
-	}
-
-	// Create HTTP client if not provided
-	if cfg.httpClient == nil {
-		cfg.httpClient = &http.Client{
-			Timeout: cfg.requestTimeout,
-		}
-	}
+	// Apply environment variables and compute defaults
+	cfg.applyEnvironment()
+	cfg.computeAPIURL()
+	cfg.ensureHTTPClient()
 
 	// In debug mode, return a mock sandbox without calling the API
 	if cfg.debug {
@@ -205,7 +171,7 @@ func New(opts ...Option) (*Sandbox, error) {
 		}
 	}
 
-	createResp, err := createSandbox(cfg.httpClient, cfg.apiURL, cfg.apiKey, createReq)
+	createResp, err := createSandbox(context.Background(), cfg.httpClient, cfg.apiURL, cfg.apiKey, createReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sandbox: %w", err)
 	}
@@ -241,13 +207,13 @@ func New(opts ...Option) (*Sandbox, error) {
 }
 
 // createSandbox calls the E2B API to create a new sandbox.
-func createSandbox(client *http.Client, apiURL, apiKey string, req *sandboxCreateRequest) (*sandboxCreateResponse, error) {
+func createSandbox(ctx context.Context, client *http.Client, apiURL, apiKey string, req *sandboxCreateRequest) (*sandboxCreateResponse, error) {
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, apiURL+"/sandboxes", bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/sandboxes", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -268,7 +234,7 @@ func createSandbox(client *http.Client, apiURL, apiKey string, req *sandboxCreat
 	}
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var createResp sandboxCreateResponse
@@ -296,40 +262,13 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 		opt(cfg)
 	}
 
-	// Get configuration from environment variables if not provided
-	if cfg.apiKey == "" {
-		cfg.apiKey = os.Getenv("E2B_API_KEY")
-	}
-	if cfg.domain == "" || cfg.domain == DefaultDomain {
-		if envDomain := os.Getenv("E2B_DOMAIN"); envDomain != "" {
-			cfg.domain = envDomain
-		}
-	}
-	if cfg.apiURL == "" {
-		cfg.apiURL = os.Getenv("E2B_API_URL")
-	}
-	if !cfg.debug {
-		cfg.debug = os.Getenv("E2B_DEBUG") == "true"
-	}
-
-	// Compute API URL if not provided
-	if cfg.apiURL == "" {
-		if cfg.debug {
-			cfg.apiURL = "http://localhost:3000"
-		} else {
-			cfg.apiURL = fmt.Sprintf("https://api.%s", cfg.domain)
-		}
-	}
+	// Apply environment variables and compute defaults
+	cfg.applyEnvironment()
+	cfg.computeAPIURL()
+	cfg.ensureHTTPClient()
 
 	if sandboxID == "" {
 		return nil, fmt.Errorf("%w: sandbox ID is required", ErrInvalidArgument)
-	}
-
-	// Create HTTP client if not provided
-	if cfg.httpClient == nil {
-		cfg.httpClient = &http.Client{
-			Timeout: cfg.requestTimeout,
-		}
 	}
 
 	// In debug mode, return a mock sandbox without calling the API
@@ -353,7 +292,7 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 	}
 
 	// Connect to sandbox via E2B API
-	connectResp, err := connectSandbox(cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID, int(cfg.timeoutMs.Seconds()))
+	connectResp, err := connectSandbox(context.Background(), cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID, int(cfg.timeoutMs.Seconds()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sandbox: %w", err)
 	}
@@ -389,14 +328,14 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 }
 
 // connectSandbox calls the E2B API to connect to an existing sandbox.
-func connectSandbox(client *http.Client, apiURL, apiKey, sandboxID string, timeout int) (*sandboxConnectResponse, error) {
+func connectSandbox(ctx context.Context, client *http.Client, apiURL, apiKey, sandboxID string, timeout int) (*sandboxConnectResponse, error) {
 	reqBody, err := json.Marshal(&sandboxConnectRequest{Timeout: timeout})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/sandboxes/%s/connect", apiURL, sandboxID)
-	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBody))
+	reqURL, _ := url.JoinPath(apiURL, "sandboxes", sandboxID, "connect")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -421,7 +360,7 @@ func connectSandbox(client *http.Client, apiURL, apiKey, sandboxID string, timeo
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var connectResp sandboxConnectResponse
@@ -758,19 +697,19 @@ func (s *Sandbox) Close() error {
 
 	// Kill the sandbox via E2B API (skip in debug mode)
 	if !s.config.debug && s.ID != "" && s.config != nil && s.config.apiKey != "" {
-		_ = killSandbox(s.config.httpClient, s.config.apiURL, s.config.apiKey, s.ID)
+		_ = killSandbox(context.Background(), s.config.httpClient, s.config.apiURL, s.config.apiKey, s.ID)
 	}
 
 	return nil
 }
 
 // killSandbox calls the E2B API to terminate a sandbox.
-func killSandbox(client *http.Client, apiURL, apiKey, sandboxID string) error {
+func killSandbox(ctx context.Context, client *http.Client, apiURL, apiKey, sandboxID string) error {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, apiURL+"/sandboxes/"+sandboxID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, apiURL+"/sandboxes/"+sandboxID, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -787,7 +726,7 @@ func killSandbox(client *http.Client, apiURL, apiKey, sandboxID string) error {
 	// 204 No Content is success, 404 means already killed
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -823,8 +762,8 @@ func setSandboxTimeout(ctx context.Context, client *http.Client, apiURL, apiKey,
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/sandboxes/%s/timeout", apiURL, sandboxID)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	reqURL, _ := url.JoinPath(apiURL, "sandboxes", sandboxID, "timeout")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -845,7 +784,7 @@ func setSandboxTimeout(ctx context.Context, client *http.Client, apiURL, apiKey,
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -1107,8 +1046,8 @@ func GetSandboxInfo(ctx context.Context, sandboxID string, client *http.Client, 
 		client = &http.Client{Timeout: DefaultRequestTimeout}
 	}
 
-	url := fmt.Sprintf("%s/sandboxes/%s", apiURL, sandboxID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL, _ := url.JoinPath(apiURL, "sandboxes", sandboxID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -1223,26 +1162,23 @@ func GetSandboxMetrics(ctx context.Context, sandboxID string, client *http.Clien
 		client = &http.Client{Timeout: DefaultRequestTimeout}
 	}
 
-	url := fmt.Sprintf("%s/sandboxes/%s/metrics", apiURL, sandboxID)
+	reqURL, _ := url.JoinPath(apiURL, "sandboxes", sandboxID, "metrics")
 
 	// Add query parameters for time range
-	params := ""
-	if cfg != nil {
+	if cfg != nil && (cfg.start != nil || cfg.end != nil) {
+		parsedURL, _ := url.Parse(reqURL)
+		params := url.Values{}
 		if cfg.start != nil {
-			params += fmt.Sprintf("start=%d", cfg.start.Unix())
+			params.Set("start", fmt.Sprintf("%d", cfg.start.Unix()))
 		}
 		if cfg.end != nil {
-			if params != "" {
-				params += "&"
-			}
-			params += fmt.Sprintf("end=%d", cfg.end.Unix())
+			params.Set("end", fmt.Sprintf("%d", cfg.end.Unix()))
 		}
-		if params != "" {
-			url += "?" + params
-		}
+		parsedURL.RawQuery = params.Encode()
+		reqURL = parsedURL.String()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -1285,20 +1221,10 @@ func Kill(ctx context.Context, sandboxID string, opts ...Option) error {
 		opt(cfg)
 	}
 
-	// Get configuration from environment variables if not provided
-	if cfg.apiKey == "" {
-		cfg.apiKey = os.Getenv("E2B_API_KEY")
-	}
-	if cfg.apiURL == "" {
-		cfg.apiURL = os.Getenv("E2B_API_URL")
-	}
-	if cfg.apiURL == "" {
-		if cfg.debug {
-			cfg.apiURL = "http://localhost:3000"
-		} else {
-			cfg.apiURL = fmt.Sprintf("https://api.%s", cfg.domain)
-		}
-	}
+	// Apply environment variables and compute defaults
+	cfg.applyEnvironment()
+	cfg.computeAPIURL()
+	cfg.ensureHTTPClient()
 
 	// Skip in debug mode
 	if cfg.debug {
@@ -1309,12 +1235,7 @@ func Kill(ctx context.Context, sandboxID string, opts ...Option) error {
 		return fmt.Errorf("%w: API key is required", ErrInvalidArgument)
 	}
 
-	client := cfg.httpClient
-	if client == nil {
-		client = &http.Client{Timeout: DefaultRequestTimeout}
-	}
-
-	return killSandbox(client, cfg.apiURL, cfg.apiKey, sandboxID)
+	return killSandbox(ctx, cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID)
 }
 
 // BetaPause pauses this sandbox.
@@ -1358,20 +1279,10 @@ func BetaPause(ctx context.Context, sandboxID string, opts ...Option) error {
 		opt(cfg)
 	}
 
-	// Get configuration from environment variables if not provided
-	if cfg.apiKey == "" {
-		cfg.apiKey = os.Getenv("E2B_API_KEY")
-	}
-	if cfg.apiURL == "" {
-		cfg.apiURL = os.Getenv("E2B_API_URL")
-	}
-	if cfg.apiURL == "" {
-		if cfg.debug {
-			cfg.apiURL = "http://localhost:3000"
-		} else {
-			cfg.apiURL = fmt.Sprintf("https://api.%s", cfg.domain)
-		}
-	}
+	// Apply environment variables and compute defaults
+	cfg.applyEnvironment()
+	cfg.computeAPIURL()
+	cfg.ensureHTTPClient()
 
 	// Skip in debug mode
 	if cfg.debug {
@@ -1382,12 +1293,7 @@ func BetaPause(ctx context.Context, sandboxID string, opts ...Option) error {
 		return fmt.Errorf("%w: API key is required", ErrInvalidArgument)
 	}
 
-	client := cfg.httpClient
-	if client == nil {
-		client = &http.Client{Timeout: DefaultRequestTimeout}
-	}
-
-	return pauseSandbox(ctx, client, cfg.apiURL, cfg.apiKey, sandboxID)
+	return pauseSandbox(ctx, cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID)
 }
 
 // pauseSandbox calls the E2B API to pause a sandbox.
@@ -1396,8 +1302,8 @@ func pauseSandbox(ctx context.Context, client *http.Client, apiURL, apiKey, sand
 		client = &http.Client{Timeout: DefaultRequestTimeout}
 	}
 
-	url := fmt.Sprintf("%s/sandboxes/%s/pause", apiURL, sandboxID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	reqURL, _ := url.JoinPath(apiURL, "sandboxes", sandboxID, "pause")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -1422,7 +1328,7 @@ func pauseSandbox(ctx context.Context, client *http.Client, apiURL, apiKey, sand
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -1458,7 +1364,7 @@ func (s *Sandbox) GetMcpToken(ctx context.Context) (string, error) {
 	// Trim any whitespace from the token
 	token := strings.TrimSpace(string(content))
 	if token == "" {
-		return "", fmt.Errorf("MCP token is empty")
+		return "", fmt.Errorf("mcp token is empty")
 	}
 
 	return token, nil

@@ -105,4 +105,49 @@
 //	    fmt.Println(execution.Error.Value)     // "division by zero"
 //	    fmt.Println(execution.Error.Traceback) // Full traceback
 //	}
+//
+// # Filesystem Operations
+//
+// The sandbox provides filesystem access for reading and writing files:
+//
+//	// Write a file
+//	_, err := sandbox.Files.Write(ctx, "/home/user/hello.txt", "Hello, World!")
+//
+//	// Read a file
+//	content, err := sandbox.Files.Read(ctx, "/home/user/hello.txt")
+//
+//	// List directory contents
+//	entries, err := sandbox.Files.List(ctx, "/home/user")
+//
+// # Command Execution
+//
+// Run shell commands in the sandbox:
+//
+//	// Run a command and wait for completion
+//	result, err := sandbox.Commands.Run(ctx, "ls -la /home/user")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println(result.Stdout)
+//
+//	// Run a command in the background
+//	handle, err := sandbox.Commands.RunBackground(ctx, "sleep 10")
+//	// ... do other work ...
+//	result, err := handle.Wait(ctx)
+//
+// # Configuration
+//
+// The SDK can be configured via options or environment variables:
+//
+//   - E2B_API_KEY: API key for authentication
+//   - E2B_DOMAIN: Base domain (default: e2b.app)
+//   - E2B_DEBUG: Enable debug mode (true/false)
+//
+// Or use functional options:
+//
+//	sandbox, err := e2b.New(
+//	    e2b.WithAPIKey("your-api-key"),
+//	    e2b.WithTimeout(10 * time.Minute),
+//	    e2b.WithMetadata(map[string]string{"env": "production"}),
+//	)
 package e2b

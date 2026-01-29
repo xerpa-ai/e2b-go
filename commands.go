@@ -35,7 +35,9 @@ func newCommands(sandbox *Sandbox) *Commands {
 	}
 }
 
-// applyTimeout applies the appropriate timeout to the context.
+// applyTimeout returns a context with the specified timeout applied.
+// If configTimeout is 0, it uses the sandbox's default request timeout.
+// If the resulting timeout is 0, the original context is returned unchanged.
 func (c *Commands) applyTimeout(ctx context.Context, configTimeout time.Duration) (context.Context, context.CancelFunc) {
 	timeout := configTimeout
 	if timeout == 0 {
@@ -264,7 +266,7 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 	var earlyStdout []byte
 	var earlyStderr []byte
 	eventCount := 0
-	maxEvents := 100 // Safety limit
+	maxEvents := maxStartupEvents
 
 	for eventCount < maxEvents {
 		if !stream.Receive() {
@@ -473,7 +475,9 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 	return handle, nil
 }
 
-// wrapRPCError wraps RPC errors with appropriate context.
+// wrapRPCError converts RPC errors to user-friendly error types.
+// It handles context deadline exceeded and Connect RPC errors,
+// returning appropriate sentinel errors or formatted error messages.
 func (c *Commands) wrapRPCError(ctx context.Context, err error) error {
 	if ctx.Err() == context.DeadlineExceeded {
 		return NewRequestTimeoutError()
@@ -492,7 +496,7 @@ func (c *Commands) wrapRPCError(ctx context.Context, err error) error {
 		case connect.CodeResourceExhausted:
 			return fmt.Errorf("%w: %s; please try again later", ErrRateLimit, connectErr.Message())
 		default:
-			return fmt.Errorf("RPC error (%s): %s", connectErr.Code(), connectErr.Message())
+			return fmt.Errorf("rpc error (%s): %s", connectErr.Code(), connectErr.Message())
 		}
 	}
 

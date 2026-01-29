@@ -125,7 +125,7 @@ func formatHTTPError(statusCode int, body string) error {
 	case 502:
 		return &SandboxError{
 			StatusCode: statusCode,
-			Message:    fmt.Sprintf("%s: This error is likely due to sandbox timeout. You can modify the sandbox timeout by passing a timeout option when starting the sandbox.", body),
+			Message:    fmt.Sprintf("%s: this error is likely due to sandbox timeout, you can modify the sandbox timeout by passing a timeout option when starting the sandbox", body),
 			Err:        ErrTimeout,
 		}
 	default:

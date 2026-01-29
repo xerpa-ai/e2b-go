@@ -147,7 +147,7 @@ func (p *SandboxPaginator) NextItems(ctx context.Context) ([]SandboxInfo, error)
 	}
 
 	// Build URL with query parameters
-	baseURL := fmt.Sprintf("%s/v2/sandboxes", p.config.apiURL)
+	baseURL, _ := url.JoinPath(p.config.apiURL, "v2", "sandboxes")
 	params := url.Values{}
 
 	if p.config.limit > 0 {
@@ -199,7 +199,7 @@ func (p *SandboxPaginator) NextItems(ctx context.Context) ([]SandboxInfo, error)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	// Parse response body as array directly (API returns array, not wrapped object)

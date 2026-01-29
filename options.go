@@ -1,7 +1,9 @@
 package e2b
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -21,23 +23,23 @@ type NetworkOptions struct {
 
 // sandboxConfig holds configuration for creating a Sandbox.
 type sandboxConfig struct {
-	apiKey              string
-	accessToken         string
-	domain              string
-	apiURL              string
-	sandboxURL          string
-	template            string
-	timeoutMs           time.Duration
-	requestTimeout      time.Duration
-	httpClient          *http.Client
-	debug               bool
-	secure              bool
-	allowInternetAccess bool
-	autoPause           bool
-	metadata            map[string]string
-	envVars             map[string]string
-	network             *NetworkOptions
-	mcp                 map[string]any
+	apiKey              string            // E2B API key for authentication
+	accessToken         string            // envd access token for sandbox operations
+	domain              string            // base domain for E2B services (default: e2b.app)
+	apiURL              string            // E2B API URL (default: https://api.{domain})
+	sandboxURL          string            // sandbox connection URL override
+	template            string            // sandbox template name or ID
+	timeoutMs           time.Duration     // sandbox lifetime timeout
+	requestTimeout      time.Duration     // default timeout for HTTP requests
+	httpClient          *http.Client      // HTTP client for API requests
+	debug               bool              // enable debug mode (uses HTTP instead of HTTPS)
+	secure              bool              // enable secure mode for sandbox traffic
+	allowInternetAccess bool              // allow sandbox to access the internet
+	autoPause           bool              // automatically pause sandbox after timeout
+	metadata            map[string]string // custom metadata for the sandbox
+	envVars             map[string]string // default environment variables
+	network             *NetworkOptions   // network access configuration
+	mcp                 map[string]any    // MCP server configuration
 }
 
 // defaultSandboxConfig returns the default sandbox configuration.
@@ -49,6 +51,51 @@ func defaultSandboxConfig() *sandboxConfig {
 		requestTimeout:      DefaultRequestTimeout,
 		secure:              true, // Enable secure mode by default for filesystem access
 		allowInternetAccess: true, // Allow internet access by default
+	}
+}
+
+// applyEnvironment applies configuration from environment variables.
+// Values are only applied if not already set via options.
+func (c *sandboxConfig) applyEnvironment() {
+	if c.apiKey == "" {
+		c.apiKey = os.Getenv("E2B_API_KEY")
+	}
+	if c.accessToken == "" {
+		c.accessToken = os.Getenv("E2B_ACCESS_TOKEN")
+	}
+	if c.domain == "" || c.domain == DefaultDomain {
+		if envDomain := os.Getenv("E2B_DOMAIN"); envDomain != "" {
+			c.domain = envDomain
+		}
+	}
+	if c.apiURL == "" {
+		c.apiURL = os.Getenv("E2B_API_URL")
+	}
+	if c.sandboxURL == "" {
+		c.sandboxURL = os.Getenv("E2B_SANDBOX_URL")
+	}
+	if !c.debug {
+		c.debug = os.Getenv("E2B_DEBUG") == "true"
+	}
+}
+
+// computeAPIURL sets the API URL if not already configured.
+func (c *sandboxConfig) computeAPIURL() {
+	if c.apiURL == "" {
+		if c.debug {
+			c.apiURL = "http://localhost:3000"
+		} else {
+			c.apiURL = fmt.Sprintf("https://api.%s", c.domain)
+		}
+	}
+}
+
+// ensureHTTPClient creates the HTTP client if not already set.
+func (c *sandboxConfig) ensureHTTPClient() {
+	if c.httpClient == nil {
+		c.httpClient = &http.Client{
+			Timeout: c.requestTimeout,
+		}
 	}
 }
 

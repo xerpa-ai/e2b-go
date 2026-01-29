@@ -52,6 +52,9 @@ const (
 	// EnvdVersionCommandsStdin is the envd version that supports stdin control.
 	// Below this version, stdin is always enabled and cannot be disabled.
 	EnvdVersionCommandsStdin = "0.3.0"
+
+	// maxStartupEvents is the safety limit for events to receive before getting a start event.
+	maxStartupEvents = 100
 )
 
 // Language constants for code execution.

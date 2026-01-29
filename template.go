@@ -577,7 +577,7 @@ func requestBuildInternal(ctx context.Context, alias string, cfg *buildConfig, t
 	}
 
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var buildResp templateBuildResponse
@@ -619,7 +619,7 @@ func triggerBuildInternal(ctx context.Context, templateID, buildID string, spec 
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/v2/templates/%s/builds/%s", cfg.apiURL, templateID, buildID)
+	endpoint, _ := url.JoinPath(cfg.apiURL, "v2", "templates", templateID, "builds", buildID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -635,7 +635,7 @@ func triggerBuildInternal(ctx context.Context, templateID, buildID string, spec 
 
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
@@ -669,9 +669,13 @@ func getBuildStatusInternal(ctx context.Context, templateID, buildID string, log
 		return nil, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
 	}
 
-	endpoint := fmt.Sprintf("%s/templates/%s/builds/%s/status", cfg.apiURL, templateID, buildID)
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", templateID, "builds", buildID, "status")
 	if logsOffset > 0 {
-		endpoint = fmt.Sprintf("%s?logsOffset=%d", endpoint, logsOffset)
+		parsedURL, _ := url.Parse(endpoint)
+		params := url.Values{}
+		params.Set("logsOffset", fmt.Sprintf("%d", logsOffset))
+		parsedURL.RawQuery = params.Encode()
+		endpoint = parsedURL.String()
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -693,7 +697,7 @@ func getBuildStatusInternal(ctx context.Context, templateID, buildID string, log
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var buildInfo TemplateBuildInfo
@@ -786,7 +790,7 @@ func GetFileUploadLink(ctx context.Context, templateID, hash string, opts ...Tem
 		return nil, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
 	}
 
-	endpoint := fmt.Sprintf("%s/templates/%s/files/%s", cfg.apiURL, templateID, hash)
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", templateID, "files", hash)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -807,7 +811,7 @@ func GetFileUploadLink(ctx context.Context, templateID, hash string, opts ...Tem
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var uploadInfo FileUploadInfo
@@ -830,7 +834,7 @@ func AliasExists(ctx context.Context, alias string, opts ...TemplateOption) (boo
 		return false, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
 	}
 
-	endpoint := fmt.Sprintf("%s/templates/aliases/%s", cfg.apiURL, url.PathEscape(alias))
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", "aliases", alias)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -855,7 +859,7 @@ func AliasExists(ctx context.Context, alias string, opts ...TemplateOption) (boo
 		return true, nil
 	default:
 		respBody, _ := io.ReadAll(resp.Body)
-		return false, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return false, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 }
 
@@ -892,7 +896,7 @@ func ListTemplates(ctx context.Context, opts ...TemplateOption) ([]TemplateInfo,
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var templates []TemplateInfo
@@ -915,7 +919,7 @@ func GetTemplateByID(ctx context.Context, templateID string, opts ...TemplateOpt
 		return nil, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
 	}
 
-	endpoint := fmt.Sprintf("%s/templates/%s", cfg.apiURL, templateID)
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", templateID)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -936,7 +940,7 @@ func GetTemplateByID(ctx context.Context, templateID string, opts ...TemplateOpt
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var template TemplateWithBuilds
@@ -959,7 +963,7 @@ func DeleteTemplate(ctx context.Context, templateID string, opts ...TemplateOpti
 		return fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
 	}
 
-	endpoint := fmt.Sprintf("%s/templates/%s", cfg.apiURL, templateID)
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", templateID)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
@@ -976,7 +980,7 @@ func DeleteTemplate(ctx context.Context, templateID string, opts ...TemplateOpti
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
@@ -1002,7 +1006,7 @@ func UpdateTemplate(ctx context.Context, templateID string, update *TemplateUpda
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/templates/%s", cfg.apiURL, templateID)
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", templateID)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(data))
 	if err != nil {
@@ -1019,7 +1023,7 @@ func UpdateTemplate(ctx context.Context, templateID string, update *TemplateUpda
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil

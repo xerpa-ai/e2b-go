@@ -69,7 +69,9 @@ func (fs *Filesystem) buildFileURL(path, user string) (string, error) {
 	return u.String(), nil
 }
 
-// applyTimeout applies the appropriate timeout to the context.
+// applyTimeout returns a context with the specified timeout applied.
+// If configTimeout is 0, it uses the sandbox's default request timeout.
+// If the resulting timeout is 0, the original context is returned unchanged.
 func (fs *Filesystem) applyTimeout(ctx context.Context, configTimeout time.Duration) (context.Context, context.CancelFunc) {
 	timeout := configTimeout
 	if timeout == 0 {
@@ -437,7 +439,7 @@ func (fs *Filesystem) handleHTTPError(statusCode int, body []byte) error {
 	case http.StatusInsufficientStorage:
 		return fmt.Errorf("not enough disk space: %s", message)
 	default:
-		return fmt.Errorf("HTTP error %d: %s", statusCode, message)
+		return fmt.Errorf("http error %d: %s", statusCode, message)
 	}
 }
 
@@ -628,7 +630,9 @@ func (fs *Filesystem) GetInfo(ctx context.Context, path string, opts ...Filesyst
 	return entryInfoFromProto(resp.Msg.Entry), nil
 }
 
-// wrapRPCError wraps RPC errors with appropriate context.
+// wrapRPCError converts RPC errors to user-friendly error types.
+// It handles context deadline exceeded and Connect RPC errors,
+// returning appropriate sentinel errors or formatted error messages.
 func (fs *Filesystem) wrapRPCError(ctx context.Context, err error) error {
 	if ctx.Err() == context.DeadlineExceeded {
 		return NewRequestTimeoutError()
@@ -645,7 +649,7 @@ func (fs *Filesystem) wrapRPCError(ctx context.Context, err error) error {
 		case connect.CodeUnavailable:
 			return fmt.Errorf("sandbox unavailable: %s", connectErr.Message())
 		default:
-			return fmt.Errorf("RPC error (%s): %s", connectErr.Code(), connectErr.Message())
+			return fmt.Errorf("rpc error (%s): %s", connectErr.Code(), connectErr.Message())
 		}
 	}
 

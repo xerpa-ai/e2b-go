@@ -3,11 +3,14 @@ package e2b
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,6 +38,9 @@ type Sandbox struct {
 	// Commands provides command execution operations for the sandbox.
 	Commands *Commands
 
+	// Pty provides pseudo-terminal operations for the sandbox.
+	Pty *Pty
+
 	// TrafficAccessToken is used for accessing sandbox services with restricted public traffic.
 	TrafficAccessToken string
 
@@ -46,15 +52,25 @@ type Sandbox struct {
 	envdVersion string
 }
 
+// networkRequestOptions represents network options in the API request.
+type networkRequestOptions struct {
+	AllowOut           []string `json:"allowOut,omitempty"`
+	DenyOut            []string `json:"denyOut,omitempty"`
+	AllowPublicTraffic bool     `json:"allowPublicTraffic,omitempty"`
+	MaskRequestHost    string   `json:"maskRequestHost,omitempty"`
+}
+
 // sandboxCreateRequest represents the request body for creating a sandbox.
 type sandboxCreateRequest struct {
-	TemplateID          string            `json:"templateID"`
-	Timeout             int               `json:"timeout,omitempty"`
-	Metadata            map[string]string `json:"metadata,omitempty"`
-	EnvVars             map[string]string `json:"envVars,omitempty"`
-	Secure              bool              `json:"secure"`
-	AllowInternetAccess bool              `json:"allow_internet_access"`
-	AutoPause           bool              `json:"autoPause"`
+	TemplateID          string                 `json:"templateID"`
+	Timeout             int                    `json:"timeout,omitempty"`
+	Metadata            map[string]string      `json:"metadata,omitempty"`
+	EnvVars             map[string]string      `json:"envVars,omitempty"`
+	Secure              bool                   `json:"secure"`
+	AllowInternetAccess bool                   `json:"allow_internet_access"`
+	AutoPause           bool                   `json:"autoPause"`
+	Network             *networkRequestOptions `json:"network,omitempty"`
+	Mcp                 map[string]any         `json:"mcp,omitempty"`
 }
 
 // sandboxConnectRequest represents the request body for connecting to a sandbox.
@@ -155,6 +171,7 @@ func New(opts ...Option) (*Sandbox, error) {
 		sandbox.initHTTPClient()
 		sandbox.Files = newFilesystem(sandbox)
 		sandbox.Commands = newCommands(sandbox)
+		sandbox.Pty = newPty(sandbox)
 		return sandbox, nil
 	}
 
@@ -172,6 +189,17 @@ func New(opts ...Option) (*Sandbox, error) {
 		Secure:              cfg.secure,
 		AllowInternetAccess: cfg.allowInternetAccess,
 		AutoPause:           cfg.autoPause,
+		Mcp:                 cfg.mcp,
+	}
+
+	// Add network options if specified
+	if cfg.network != nil {
+		createReq.Network = &networkRequestOptions{
+			AllowOut:           cfg.network.AllowOut,
+			DenyOut:            cfg.network.DenyOut,
+			AllowPublicTraffic: cfg.network.AllowPublicTraffic,
+			MaskRequestHost:    cfg.network.MaskRequestHost,
+		}
 	}
 
 	createResp, err := createSandbox(cfg.httpClient, cfg.apiURL, cfg.apiKey, createReq)
@@ -202,6 +230,9 @@ func New(opts ...Option) (*Sandbox, error) {
 
 	// Initialize the Commands
 	sandbox.Commands = newCommands(sandbox)
+
+	// Initialize the PTY
+	sandbox.Pty = newPty(sandbox)
 
 	return sandbox, nil
 }
@@ -309,6 +340,7 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 		sandbox.initHTTPClient()
 		sandbox.Files = newFilesystem(sandbox)
 		sandbox.Commands = newCommands(sandbox)
+		sandbox.Pty = newPty(sandbox)
 		return sandbox, nil
 	}
 
@@ -346,6 +378,9 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 
 	// Initialize the Commands
 	sandbox.Commands = newCommands(sandbox)
+
+	// Initialize the PTY
+	sandbox.Pty = newPty(sandbox)
 
 	return sandbox, nil
 }
@@ -470,12 +505,19 @@ func (s *Sandbox) RunCode(ctx context.Context, code string, opts ...RunOption) (
 	}
 
 	// Set code execution timeout (separate from sandbox lifetime timeout)
-	timeout := cfg.timeout
-	if timeout == 0 {
+	// nil = use default, 0 = no timeout, >0 = use that value
+	var timeout time.Duration
+	if cfg.timeout == nil {
+		// Not set, use default
 		timeout = DefaultCodeExecutionTimeout
+	} else if *cfg.timeout == 0 {
+		// Explicitly set to 0 means no timeout
+		timeout = 0
+	} else {
+		timeout = *cfg.timeout
 	}
 
-	// Create context with timeout if needed
+	// Create context with timeout if needed (skip if timeout is 0 for no timeout)
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -865,27 +907,186 @@ func (s *Sandbox) IsRunning(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// urlConfig holds configuration for URL generation.
+type urlConfig struct {
+	signatureExpiration int    // seconds, 0 means no expiration
+	user                string // user for path resolution
+}
+
+// URLOption configures URL generation behavior.
+type URLOption func(*urlConfig)
+
+// WithSignatureExpiration sets the signature expiration time in seconds.
+// If not set or set to 0, the signature will not expire.
+func WithSignatureExpiration(seconds int) URLOption {
+	return func(c *urlConfig) {
+		c.signatureExpiration = seconds
+	}
+}
+
+// WithURLUser sets the user for URL path resolution.
+func WithURLUser(user string) URLOption {
+	return func(c *urlConfig) {
+		c.user = user
+	}
+}
+
 // UploadURL returns the URL to upload a file to the sandbox.
 // You have to send a POST request to this URL with the file as multipart/form-data.
-func (s *Sandbox) UploadURL(path string) string {
+//
+// When the sandbox is created with secure mode (default), the URL will include
+// a signature for authentication. You can optionally set an expiration time
+// for the signature using WithSignatureExpiration.
+//
+// Example:
+//
+//	url, err := sandbox.UploadURL("/path/to/file")
+//	url, err := sandbox.UploadURL("/path/to/file", e2b.WithSignatureExpiration(3600)) // 1 hour
+func (s *Sandbox) UploadURL(path string, opts ...URLOption) (string, error) {
+	cfg := &urlConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Default user handling for older envd versions
+	user := cfg.user
+	if user == "" && s.compareVersion(EnvdVersionDefaultUser) < 0 {
+		user = "user"
+	}
+
 	scheme := "https"
 	if s.config.debug {
 		scheme = "http"
 	}
+
 	baseURL := fmt.Sprintf("%s://%s/files", scheme, s.GetHost(EnvdPort))
+
+	// Build query parameters
+	params := make([]string, 0)
 	if path != "" {
-		return fmt.Sprintf("%s?path=%s", baseURL, path)
+		params = append(params, fmt.Sprintf("path=%s", path))
 	}
-	return baseURL
+	if user != "" {
+		params = append(params, fmt.Sprintf("username=%s", user))
+	}
+
+	// Add signature if access token is available
+	if s.accessToken != "" {
+		sig, exp := getSignature(path, "write", user, s.accessToken, cfg.signatureExpiration)
+		params = append(params, fmt.Sprintf("signature=%s", sig))
+		if exp > 0 {
+			params = append(params, fmt.Sprintf("signature_expiration=%d", exp))
+		}
+	}
+
+	if len(params) > 0 {
+		return baseURL + "?" + joinParams(params), nil
+	}
+	return baseURL, nil
 }
 
 // DownloadURL returns the URL to download a file from the sandbox.
-func (s *Sandbox) DownloadURL(path string) string {
+//
+// When the sandbox is created with secure mode (default), the URL will include
+// a signature for authentication. You can optionally set an expiration time
+// for the signature using WithSignatureExpiration.
+//
+// Example:
+//
+//	url, err := sandbox.DownloadURL("/path/to/file")
+//	url, err := sandbox.DownloadURL("/path/to/file", e2b.WithSignatureExpiration(3600)) // 1 hour
+func (s *Sandbox) DownloadURL(path string, opts ...URLOption) (string, error) {
+	cfg := &urlConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Default user handling for older envd versions
+	user := cfg.user
+	if user == "" && s.compareVersion(EnvdVersionDefaultUser) < 0 {
+		user = "user"
+	}
+
 	scheme := "https"
 	if s.config.debug {
 		scheme = "http"
 	}
-	return fmt.Sprintf("%s://%s/files?path=%s", scheme, s.GetHost(EnvdPort), path)
+
+	baseURL := fmt.Sprintf("%s://%s/files", scheme, s.GetHost(EnvdPort))
+
+	// Build query parameters
+	params := []string{fmt.Sprintf("path=%s", path)}
+	if user != "" {
+		params = append(params, fmt.Sprintf("username=%s", user))
+	}
+
+	// Add signature if access token is available
+	if s.accessToken != "" {
+		sig, exp := getSignature(path, "read", user, s.accessToken, cfg.signatureExpiration)
+		params = append(params, fmt.Sprintf("signature=%s", sig))
+		if exp > 0 {
+			params = append(params, fmt.Sprintf("signature_expiration=%d", exp))
+		}
+	}
+
+	return baseURL + "?" + joinParams(params), nil
+}
+
+// joinParams joins URL query parameters with &.
+func joinParams(params []string) string {
+	result := ""
+	for i, p := range params {
+		if i > 0 {
+			result += "&"
+		}
+		result += p
+	}
+	return result
+}
+
+// compareVersion compares the envd version with the given version.
+// Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
+func (s *Sandbox) compareVersion(version string) int {
+	// Simple version comparison - add "v" prefix for semver if needed
+	v1 := s.envdVersion
+	if v1 == "" {
+		return -1
+	}
+	v2 := version
+	// Basic string comparison for semver-like versions
+	if v1 < v2 {
+		return -1
+	}
+	if v1 > v2 {
+		return 1
+	}
+	return 0
+}
+
+// getSignature generates a v1 signature for sandbox file URLs.
+// Returns the signature string and expiration timestamp (0 if no expiration).
+func getSignature(path, operation, user, accessToken string, expirationSeconds int) (string, int64) {
+	var expiration int64
+	if expirationSeconds > 0 {
+		expiration = time.Now().Unix() + int64(expirationSeconds)
+	}
+
+	// Build the raw string to hash
+	var raw string
+	if expiration == 0 {
+		raw = fmt.Sprintf("%s:%s:%s:%s", path, operation, user, accessToken)
+	} else {
+		raw = fmt.Sprintf("%s:%s:%s:%s:%d", path, operation, user, accessToken, expiration)
+	}
+
+	// SHA256 hash
+	hash := sha256.Sum256([]byte(raw))
+
+	// Base64 encode without padding
+	encoded := base64.StdEncoding.EncodeToString(hash[:])
+	encoded = strings.TrimRight(encoded, "=")
+
+	return "v1_" + encoded, expiration
 }
 
 // SandboxInfo contains information about a sandbox.
@@ -898,7 +1099,9 @@ type SandboxInfo struct {
 	EndAt       string            `json:"endAt"`
 	CpuCount    int               `json:"cpuCount"`
 	MemoryMB    int               `json:"memoryMB"`
+	DiskSizeMB  int               `json:"diskSizeMB"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
+	State       SandboxState      `json:"state"`
 	EnvdVersion string            `json:"envdVersion"`
 }
 
@@ -950,6 +1153,140 @@ func GetSandboxInfo(ctx context.Context, sandboxID string, client *http.Client, 
 	return &info, nil
 }
 
+// SandboxMetrics contains resource usage metrics for a sandbox.
+type SandboxMetrics struct {
+	CPUCount      int       `json:"cpuCount"`
+	CPUUsedPct    float64   `json:"cpuUsedPct"`
+	MemUsed       int64     `json:"memUsed"`
+	MemTotal      int64     `json:"memTotal"`
+	DiskUsed      int64     `json:"diskUsed"`
+	DiskTotal     int64     `json:"diskTotal"`
+	TimestampUnix int64     `json:"timestampUnix"`
+	Timestamp     time.Time `json:"timestamp"` // deprecated but kept for compatibility
+}
+
+// metricsConfig holds configuration for GetMetrics.
+type metricsConfig struct {
+	start          *time.Time
+	end            *time.Time
+	requestTimeout time.Duration
+}
+
+// MetricsOption configures GetMetrics behavior.
+type MetricsOption func(*metricsConfig)
+
+// WithMetricsStart sets the start time for metrics query.
+func WithMetricsStart(t time.Time) MetricsOption {
+	return func(c *metricsConfig) {
+		c.start = &t
+	}
+}
+
+// WithMetricsEnd sets the end time for metrics query.
+func WithMetricsEnd(t time.Time) MetricsOption {
+	return func(c *metricsConfig) {
+		c.end = &t
+	}
+}
+
+// WithMetricsRequestTimeout sets the request timeout for metrics query.
+func WithMetricsRequestTimeout(d time.Duration) MetricsOption {
+	return func(c *metricsConfig) {
+		c.requestTimeout = d
+	}
+}
+
+// GetMetrics returns resource usage metrics for this sandbox.
+// Metrics include CPU, memory, and disk usage information.
+//
+// Example:
+//
+//	metrics, err := sandbox.GetMetrics(ctx)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	for _, m := range metrics {
+//	    fmt.Printf("CPU: %.2f%%, Memory: %d/%d bytes\n", m.CPUUsedPct, m.MemUsed, m.MemTotal)
+//	}
+func (s *Sandbox) GetMetrics(ctx context.Context, opts ...MetricsOption) ([]SandboxMetrics, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, ErrSandboxClosed
+	}
+	s.mu.RUnlock()
+
+	cfg := &metricsConfig{
+		requestTimeout: s.config.requestTimeout,
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	return GetSandboxMetrics(ctx, s.ID, s.config.httpClient, s.config.apiURL, s.config.apiKey, cfg)
+}
+
+// GetSandboxMetrics returns resource usage metrics for a sandbox by ID.
+// This is a static method that can be called without a sandbox instance.
+func GetSandboxMetrics(ctx context.Context, sandboxID string, client *http.Client, apiURL, apiKey string, cfg *metricsConfig) ([]SandboxMetrics, error) {
+	if client == nil {
+		client = &http.Client{Timeout: DefaultRequestTimeout}
+	}
+
+	url := fmt.Sprintf("%s/sandboxes/%s/metrics", apiURL, sandboxID)
+
+	// Add query parameters for time range
+	params := ""
+	if cfg != nil {
+		if cfg.start != nil {
+			params += fmt.Sprintf("start=%d", cfg.start.Unix())
+		}
+		if cfg.end != nil {
+			if params != "" {
+				params += "&"
+			}
+			params += fmt.Sprintf("end=%d", cfg.end.Unix())
+		}
+		if params != "" {
+			url += "?" + params
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("User-Agent", "e2b-go-sdk/"+Version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: sandbox %s not found", ErrNotFound, sandboxID)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var metrics []SandboxMetrics
+	if err := json.Unmarshal(body, &metrics); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return metrics, nil
+}
+
 // Kill terminates a sandbox by ID.
 // This is a static method that can be called without a sandbox instance.
 func Kill(ctx context.Context, sandboxID string, opts ...Option) error {
@@ -988,4 +1325,151 @@ func Kill(ctx context.Context, sandboxID string, opts ...Option) error {
 	}
 
 	return killSandbox(client, cfg.apiURL, cfg.apiKey, sandboxID)
+}
+
+// BetaPause pauses this sandbox.
+// This is a beta feature and may change in the future.
+//
+// A paused sandbox can be resumed by calling Connect with the sandbox ID.
+//
+// Example:
+//
+//	err := sandbox.BetaPause(ctx)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	// Later, resume with:
+//	// sandbox, err := e2b.Connect(sandboxID)
+func (s *Sandbox) BetaPause(ctx context.Context) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrSandboxClosed
+	}
+	apiKey := s.config.apiKey
+	apiURL := s.config.apiURL
+	client := s.config.httpClient
+	debug := s.config.debug
+	s.mu.RUnlock()
+
+	if debug {
+		return nil
+	}
+
+	return pauseSandbox(ctx, client, apiURL, apiKey, s.ID)
+}
+
+// BetaPause pauses a sandbox by ID.
+// This is a beta feature and may change in the future.
+// This is a static method that can be called without a sandbox instance.
+func BetaPause(ctx context.Context, sandboxID string, opts ...Option) error {
+	cfg := defaultSandboxConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Get configuration from environment variables if not provided
+	if cfg.apiKey == "" {
+		cfg.apiKey = os.Getenv("E2B_API_KEY")
+	}
+	if cfg.apiURL == "" {
+		cfg.apiURL = os.Getenv("E2B_API_URL")
+	}
+	if cfg.apiURL == "" {
+		if cfg.debug {
+			cfg.apiURL = "http://localhost:3000"
+		} else {
+			cfg.apiURL = fmt.Sprintf("https://api.%s", cfg.domain)
+		}
+	}
+
+	// Skip in debug mode
+	if cfg.debug {
+		return nil
+	}
+
+	if cfg.apiKey == "" {
+		return fmt.Errorf("%w: API key is required", ErrInvalidArgument)
+	}
+
+	client := cfg.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: DefaultRequestTimeout}
+	}
+
+	return pauseSandbox(ctx, client, cfg.apiURL, cfg.apiKey, sandboxID)
+}
+
+// pauseSandbox calls the E2B API to pause a sandbox.
+func pauseSandbox(ctx context.Context, client *http.Client, apiURL, apiKey, sandboxID string) error {
+	if client == nil {
+		client = &http.Client{Timeout: DefaultRequestTimeout}
+	}
+
+	url := fmt.Sprintf("%s/sandboxes/%s/pause", apiURL, sandboxID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("User-Agent", "e2b-go-sdk/"+Version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 409 Conflict means sandbox is already paused - treat as success
+	if resp.StatusCode == http.StatusConflict {
+		return nil
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%w: sandbox %s not found", ErrNotFound, sandboxID)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// mcpTokenPath is the path to the MCP token file in the sandbox.
+const mcpTokenPath = "/etc/mcp-gateway/.token"
+
+// GetMcpToken retrieves the MCP (Model Context Protocol) token from the sandbox.
+// The token is read from /etc/mcp-gateway/.token in the sandbox filesystem.
+//
+// Example:
+//
+//	token, err := sandbox.GetMcpToken(ctx)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println("MCP Token:", token)
+func (s *Sandbox) GetMcpToken(ctx context.Context) (string, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return "", ErrSandboxClosed
+	}
+	s.mu.RUnlock()
+
+	// Read the token file from the sandbox filesystem
+	content, err := s.Files.Read(ctx, mcpTokenPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read MCP token: %w", err)
+	}
+
+	// Trim any whitespace from the token
+	token := strings.TrimSpace(string(content))
+	if token == "" {
+		return "", fmt.Errorf("MCP token is empty")
+	}
+
+	return token, nil
 }

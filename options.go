@@ -5,6 +5,20 @@ import (
 	"time"
 )
 
+// NetworkOptions configures network access for the sandbox.
+type NetworkOptions struct {
+	// AllowOut specifies allowed outbound traffic destinations (hostnames or IPs).
+	// When set, only traffic to these destinations is allowed.
+	AllowOut []string
+	// DenyOut specifies denied outbound traffic destinations (hostnames or IPs).
+	// When set, traffic to these destinations is blocked.
+	DenyOut []string
+	// AllowPublicTraffic allows or denies public traffic to the sandbox.
+	AllowPublicTraffic bool
+	// MaskRequestHost masks the request host header to this value.
+	MaskRequestHost string
+}
+
 // sandboxConfig holds configuration for creating a Sandbox.
 type sandboxConfig struct {
 	apiKey              string
@@ -22,6 +36,8 @@ type sandboxConfig struct {
 	autoPause           bool
 	metadata            map[string]string
 	envVars             map[string]string
+	network             *NetworkOptions
+	mcp                 map[string]any
 }
 
 // defaultSandboxConfig returns the default sandbox configuration.
@@ -162,12 +178,42 @@ func WithEnvVars(envVars map[string]string) Option {
 	}
 }
 
+// WithNetwork sets network options for the sandbox.
+// This allows fine-grained control over network access.
+//
+// Example:
+//
+//	sandbox, err := e2b.New(e2b.WithNetwork(e2b.NetworkOptions{
+//	    AllowOut: []string{"api.example.com"},
+//	    DenyOut:  []string{"internal.example.com"},
+//	    AllowPublicTraffic: true,
+//	}))
+func WithNetwork(opts NetworkOptions) Option {
+	return func(c *sandboxConfig) {
+		c.network = &opts
+	}
+}
+
+// WithMcp sets MCP (Model Context Protocol) configuration for the sandbox.
+// This enables MCP server capabilities in the sandbox.
+//
+// Example:
+//
+//	sandbox, err := e2b.New(e2b.WithMcp(map[string]any{
+//	    "server": map[string]any{"enabled": true},
+//	}))
+func WithMcp(mcp map[string]any) Option {
+	return func(c *sandboxConfig) {
+		c.mcp = mcp
+	}
+}
+
 // runConfig holds configuration for running code.
 type runConfig struct {
 	language       string
 	context        *Context
 	envVars        map[string]string
-	timeout        time.Duration
+	timeout        *time.Duration // nil = use default, 0 = no timeout, >0 = use that value
 	requestTimeout time.Duration
 	onStdout       func(OutputMessage)
 	onStderr       func(OutputMessage)
@@ -206,9 +252,11 @@ func WithRunEnvVars(envVars map[string]string) RunOption {
 }
 
 // WithRunTimeout sets the timeout for code execution.
+// Pass 0 for no timeout (infinite).
+// If not called, defaults to DefaultCodeExecutionTimeout.
 func WithRunTimeout(d time.Duration) RunOption {
 	return func(c *runConfig) {
-		c.timeout = d
+		c.timeout = &d
 	}
 }
 

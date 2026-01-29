@@ -33,7 +33,7 @@ const (
 	KeepalivePingIntervalSec = 50
 
 	// EnvdDebugFallback is the envd version used in debug mode.
-	EnvdDebugFallback = "0.0.1"
+	EnvdDebugFallback = "99.99.99"
 
 	// DebugSandboxID is the sandbox ID used in debug mode.
 	DebugSandboxID = "debug_sandbox_id"

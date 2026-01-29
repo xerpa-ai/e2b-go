@@ -26,6 +26,13 @@ type CommandHandle struct {
 
 	onStdout func(string)
 	onStderr func(string)
+
+	// PTY support
+	pty           *Pty
+	stream        *connect.ServerStreamForClient[processpb.StartResponse]
+	connectStream *connect.ServerStreamForClient[processpb.ConnectResponse]
+	isPty         bool
+	exitCode      int
 }
 
 // newCommandHandle creates a new CommandHandle for Start responses and starts processing events.
@@ -130,6 +137,64 @@ func (h *CommandHandle) processConnectEvents(stream *connect.ServerStreamForClie
 	}
 }
 
+// processPtyEvents reads events from a PTY start stream and updates internal state.
+func (h *CommandHandle) processPtyEvents() {
+	defer close(h.done)
+
+	for h.stream.Receive() {
+		h.mu.Lock()
+		if h.canceled {
+			h.mu.Unlock()
+			return
+		}
+		h.mu.Unlock()
+
+		resp := h.stream.Msg()
+		event := resp.GetEvent()
+		if event != nil {
+			h.handleEvent(event)
+		}
+	}
+
+	// Check for stream error
+	if err := h.stream.Err(); err != nil {
+		h.mu.Lock()
+		if h.err == nil {
+			h.err = err
+		}
+		h.mu.Unlock()
+	}
+}
+
+// processPtyConnectEvents reads events from a PTY connect stream and updates internal state.
+func (h *CommandHandle) processPtyConnectEvents() {
+	defer close(h.done)
+
+	for h.connectStream.Receive() {
+		h.mu.Lock()
+		if h.canceled {
+			h.mu.Unlock()
+			return
+		}
+		h.mu.Unlock()
+
+		resp := h.connectStream.Msg()
+		event := resp.GetEvent()
+		if event != nil {
+			h.handleEvent(event)
+		}
+	}
+
+	// Check for stream error
+	if err := h.connectStream.Err(); err != nil {
+		h.mu.Lock()
+		if h.err == nil {
+			h.err = err
+		}
+		h.mu.Unlock()
+	}
+}
+
 // handleEvent processes a single event from the stream.
 func (h *CommandHandle) handleEvent(event *processpb.ProcessEvent) {
 	switch e := event.GetEvent().(type) {
@@ -172,7 +237,18 @@ func (h *CommandHandle) handleDataEvent(data *processpb.ProcessEvent_DataEvent) 
 		}
 	}
 
-	// PTY output is currently ignored
+	// Handle PTY output (treat as stdout for PTY mode)
+	if pty := data.GetPty(); pty != nil {
+		out := string(pty)
+		h.mu.Lock()
+		h.stdout.WriteString(out)
+		callback := h.onStdout
+		h.mu.Unlock()
+
+		if callback != nil {
+			callback(out)
+		}
+	}
 }
 
 // handleEndEvent processes the end event when the command finishes.
@@ -289,7 +365,29 @@ func (h *CommandHandle) Wait(ctx context.Context) (*CommandResult, error) {
 // It uses SIGKILL signal to kill the command.
 // Returns true if the command was killed, false if the command was not found.
 func (h *CommandHandle) Kill() (bool, error) {
+	// For PTY handles, use the PTY's Kill method
+	if h.isPty && h.pty != nil {
+		return h.pty.Kill(context.Background(), h.pid)
+	}
 	return h.handleKill()
+}
+
+// SendInput sends input data to the command/PTY.
+// For PTY, this is equivalent to typing in the terminal.
+func (h *CommandHandle) SendInput(ctx context.Context, data []byte) error {
+	if !h.isPty || h.pty == nil {
+		return ErrInvalidArgument
+	}
+	return h.pty.SendStdin(ctx, h.pid, data)
+}
+
+// Resize changes the terminal size for PTY handles.
+// This has no effect on non-PTY handles.
+func (h *CommandHandle) Resize(ctx context.Context, rows, cols uint32) error {
+	if !h.isPty || h.pty == nil {
+		return nil
+	}
+	return h.pty.Resize(ctx, h.pid, PtySize{Rows: rows, Cols: cols})
 }
 
 // Disconnect stops receiving events from the command.

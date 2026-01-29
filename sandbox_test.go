@@ -253,7 +253,7 @@ func TestRunOptions(t *testing.T) {
 	}
 
 	WithRunTimeout(5 * time.Second)(cfg)
-	if cfg.timeout != 5*time.Second {
+	if cfg.timeout == nil || *cfg.timeout != 5*time.Second {
 		t.Errorf("WithRunTimeout() timeout = %v, want 5s", cfg.timeout)
 	}
 

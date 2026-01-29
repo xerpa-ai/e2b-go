@@ -1463,3 +1463,24 @@ func (s *Sandbox) GetMcpToken(ctx context.Context) (string, error) {
 
 	return token, nil
 }
+
+// GetMcpUrl returns the MCP (Model Context Protocol) gateway URL for this sandbox.
+// This URL can be used to connect MCP clients to the sandbox's MCP gateway.
+//
+// The URL follows the format: https://{sandboxId}-mcp.{domain}
+//
+// Example:
+//
+//	mcpUrl := sandbox.GetMcpUrl()
+//	fmt.Println("MCP Gateway URL:", mcpUrl)
+//
+//	// Use with MCP token for authentication
+//	token, _ := sandbox.GetMcpToken(ctx)
+//	// Connect your MCP client to mcpUrl with Authorization: Bearer {token}
+func (s *Sandbox) GetMcpUrl() string {
+	protocol := "https"
+	if s.config != nil && s.config.debug {
+		protocol = "http"
+	}
+	return fmt.Sprintf("%s://%s-mcp.%s", protocol, s.ID, s.Domain)
+}

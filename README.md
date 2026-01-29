@@ -462,6 +462,45 @@ for _, result := range execution.Results {
 - `WithWatchTimeout(ms)` - Set watch timeout in milliseconds
 - `OnWatchExit(handler)` - Callback when watch stops
 
+## MCP Integration
+
+The SDK supports MCP (Model Context Protocol) for connecting AI models to tools:
+
+```go
+// Create sandbox with MCP configuration
+sandbox, err := e2b.New(
+    e2b.WithAPIKey("your-api-key"),
+    e2b.WithMcp(map[string]any{
+        "browserbase": map[string]any{
+            "apiKey": os.Getenv("BROWSERBASE_API_KEY"),
+        },
+    }),
+)
+
+// Get MCP gateway URL and token for client connections
+mcpUrl := sandbox.GetMcpUrl()
+token, err := sandbox.GetMcpToken(ctx)
+
+// Connect your MCP client to mcpUrl with Authorization: Bearer {token}
+```
+
+## Feature Parity with Official SDKs
+
+This Go SDK provides feature parity with the official Python and JavaScript SDKs for:
+- Core sandbox management (create, connect, kill, list, pause/resume)
+- Filesystem operations
+- Command execution and PTY
+- Code execution with streaming
+- Chart data extraction
+- MCP configuration and integration
+- Template building (with extended programmatic builder API)
+
+### Not Implemented
+
+The following features from the official E2B ecosystem are not yet implemented:
+
+- **Desktop SDK** - The official `@e2b/desktop` package provides browser/desktop automation (mouse, keyboard, screenshots, video streaming). This is a separate product that may be considered for a future `e2b-desktop-go` module if there is demand.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

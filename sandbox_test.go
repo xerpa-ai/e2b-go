@@ -423,3 +423,57 @@ func TestLanguageConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestGetMcpUrl(t *testing.T) {
+	tests := []struct {
+		name    string
+		sandbox *Sandbox
+		wantURL string
+	}{
+		{
+			name: "standard sandbox",
+			sandbox: &Sandbox{
+				ID:     "abc123-xyz789",
+				Domain: "e2b.dev",
+				config: &sandboxConfig{debug: false},
+			},
+			wantURL: "https://abc123-xyz789-mcp.e2b.dev",
+		},
+		{
+			name: "debug mode sandbox",
+			sandbox: &Sandbox{
+				ID:     "debug-sandbox-id",
+				Domain: "localhost:3000",
+				config: &sandboxConfig{debug: true},
+			},
+			wantURL: "http://debug-sandbox-id-mcp.localhost:3000",
+		},
+		{
+			name: "custom domain",
+			sandbox: &Sandbox{
+				ID:     "sandbox-456",
+				Domain: "custom.example.com",
+				config: &sandboxConfig{debug: false},
+			},
+			wantURL: "https://sandbox-456-mcp.custom.example.com",
+		},
+		{
+			name: "nil config defaults to https",
+			sandbox: &Sandbox{
+				ID:     "sandbox-789",
+				Domain: "e2b.dev",
+				config: nil,
+			},
+			wantURL: "https://sandbox-789-mcp.e2b.dev",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.sandbox.GetMcpUrl()
+			if got != tt.wantURL {
+				t.Errorf("GetMcpUrl() = %v, want %v", got, tt.wantURL)
+			}
+		})
+	}
+}

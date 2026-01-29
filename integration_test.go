@@ -184,7 +184,6 @@ func TestCommands(t *testing.T) {
 		WithAPIKey(apiKey),
 		WithTemplate("base"),
 		WithTimeout(300*time.Second),
-		WithSkipJupyterWait(true), // base template doesn't have Jupyter
 	)
 	if err != nil {
 		t.Fatalf("Failed to create sandbox: %v", err)

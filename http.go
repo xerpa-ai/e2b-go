@@ -50,11 +50,10 @@ type streamResponse struct {
 
 // httpClient wraps the standard http.Client with sandbox-specific functionality.
 type httpClient struct {
-	client         *http.Client
-	baseURL        string
-	accessToken    string
-	trafficToken   string
-	requestTimeout int64 // milliseconds
+	client       *http.Client
+	baseURL      string
+	accessToken  string
+	trafficToken string
 }
 
 // newHTTPClient creates a new httpClient.
@@ -162,13 +161,8 @@ func (c *httpClient) doStreamRequest(
 
 		var sr streamResponse
 		if err := json.Unmarshal([]byte(line), &sr); err != nil {
-			// Log malformed lines for debugging
-			// fmt.Printf("[debug] malformed line: %s\n", line)
 			continue
 		}
-
-		// Debug: uncomment to log received events
-		// fmt.Printf("[debug] received line: %s\n", line)
 
 		if err := handler(&sr); err != nil {
 			return resp.StatusCode, err

@@ -10,7 +10,6 @@ import (
 	"connectrpc.com/connect"
 	processpb "github.com/xerpa-ai/e2b-go/internal/proto/process"
 	"github.com/xerpa-ai/e2b-go/internal/proto/process/processpbconnect"
-	"golang.org/x/mod/semver"
 )
 
 // PtySize represents the size of a PTY terminal.
@@ -88,15 +87,7 @@ func (p *Pty) setRPCHeadersWithUser(req connect.AnyRequest, user string) {
 
 // compareVersion compares the envd version with the given version.
 func (p *Pty) compareVersion(version string) int {
-	v1 := p.envdVersion
-	if v1 != "" && v1[0] != 'v' {
-		v1 = "v" + v1
-	}
-	v2 := version
-	if v2 != "" && v2[0] != 'v' {
-		v2 = "v" + v2
-	}
-	return semver.Compare(v1, v2)
+	return compareVersions(p.envdVersion, version)
 }
 
 // setStreamingHeaders sets headers for streaming requests including keepalive.

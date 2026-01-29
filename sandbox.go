@@ -1047,20 +1047,7 @@ func joinParams(params []string) string {
 // compareVersion compares the envd version with the given version.
 // Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
 func (s *Sandbox) compareVersion(version string) int {
-	// Simple version comparison - add "v" prefix for semver if needed
-	v1 := s.envdVersion
-	if v1 == "" {
-		return -1
-	}
-	v2 := version
-	// Basic string comparison for semver-like versions
-	if v1 < v2 {
-		return -1
-	}
-	if v1 > v2 {
-		return 1
-	}
-	return 0
+	return compareVersions(s.envdVersion, version)
 }
 
 // getSignature generates a v1 signature for sandbox file URLs.

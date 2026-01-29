@@ -15,7 +15,6 @@ import (
 	"connectrpc.com/connect"
 	filesystempb "github.com/xerpa-ai/e2b-go/internal/proto/filesystem"
 	"github.com/xerpa-ai/e2b-go/internal/proto/filesystem/filesystempbconnect"
-	"golang.org/x/mod/semver"
 )
 
 // EnvdPort is the port for the envd service.
@@ -131,16 +130,7 @@ func (fs *Filesystem) setRPCHeadersWithUser(req connect.AnyRequest, user string)
 // compareVersion compares the envd version with the given version.
 // Returns -1 if envdVersion < version, 0 if equal, 1 if envdVersion > version.
 func (fs *Filesystem) compareVersion(version string) int {
-	// Add "v" prefix for semver comparison if not present
-	v1 := fs.envdVersion
-	if v1 != "" && v1[0] != 'v' {
-		v1 = "v" + v1
-	}
-	v2 := version
-	if v2 != "" && v2[0] != 'v' {
-		v2 = "v" + v2
-	}
-	return semver.Compare(v1, v2)
+	return compareVersions(fs.envdVersion, version)
 }
 
 // setStreamingHeaders sets headers for streaming requests including keepalive.

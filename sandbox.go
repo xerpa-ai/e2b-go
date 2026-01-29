@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -931,6 +932,34 @@ func WithURLUser(user string) URLOption {
 	}
 }
 
+// fileURL builds the base file URL with optional query parameters.
+func (s *Sandbox) fileURL(path, username string) string {
+	scheme := "https"
+	if s.config.debug {
+		scheme = "http"
+	}
+
+	u := &url.URL{
+		Scheme: scheme,
+		Host:   s.GetHost(EnvdPort),
+		Path:   "/files",
+	}
+
+	params := url.Values{}
+	if path != "" {
+		params.Set("path", path)
+	}
+	if username != "" {
+		params.Set("username", username)
+	}
+
+	if len(params) > 0 {
+		u.RawQuery = params.Encode()
+	}
+
+	return u.String()
+}
+
 // UploadURL returns the URL to upload a file to the sandbox.
 // You have to send a POST request to this URL with the file as multipart/form-data.
 //
@@ -954,35 +983,24 @@ func (s *Sandbox) UploadURL(path string, opts ...URLOption) (string, error) {
 		user = "user"
 	}
 
-	scheme := "https"
-	if s.config.debug {
-		scheme = "http"
+	baseURL := s.fileURL(path, user)
+
+	if s.accessToken == "" {
+		return baseURL, nil
 	}
 
-	baseURL := fmt.Sprintf("%s://%s/files", scheme, s.GetHost(EnvdPort))
+	// Add signature parameters
+	u, _ := url.Parse(baseURL)
+	params := u.Query()
 
-	// Build query parameters
-	params := make([]string, 0)
-	if path != "" {
-		params = append(params, fmt.Sprintf("path=%s", path))
-	}
-	if user != "" {
-		params = append(params, fmt.Sprintf("username=%s", user))
-	}
-
-	// Add signature if access token is available
-	if s.accessToken != "" {
-		sig, exp := getSignature(path, "write", user, s.accessToken, cfg.signatureExpiration)
-		params = append(params, fmt.Sprintf("signature=%s", sig))
-		if exp > 0 {
-			params = append(params, fmt.Sprintf("signature_expiration=%d", exp))
-		}
+	sig, exp := getSignature(path, "write", user, s.accessToken, cfg.signatureExpiration)
+	params.Set("signature", sig)
+	if exp > 0 {
+		params.Set("signature_expiration", fmt.Sprintf("%d", exp))
 	}
 
-	if len(params) > 0 {
-		return baseURL + "?" + joinParams(params), nil
-	}
-	return baseURL, nil
+	u.RawQuery = params.Encode()
+	return u.String(), nil
 }
 
 // DownloadURL returns the URL to download a file from the sandbox.
@@ -1007,41 +1025,24 @@ func (s *Sandbox) DownloadURL(path string, opts ...URLOption) (string, error) {
 		user = "user"
 	}
 
-	scheme := "https"
-	if s.config.debug {
-		scheme = "http"
+	baseURL := s.fileURL(path, user)
+
+	if s.accessToken == "" {
+		return baseURL, nil
 	}
 
-	baseURL := fmt.Sprintf("%s://%s/files", scheme, s.GetHost(EnvdPort))
+	// Add signature parameters
+	u, _ := url.Parse(baseURL)
+	params := u.Query()
 
-	// Build query parameters
-	params := []string{fmt.Sprintf("path=%s", path)}
-	if user != "" {
-		params = append(params, fmt.Sprintf("username=%s", user))
+	sig, exp := getSignature(path, "read", user, s.accessToken, cfg.signatureExpiration)
+	params.Set("signature", sig)
+	if exp > 0 {
+		params.Set("signature_expiration", fmt.Sprintf("%d", exp))
 	}
 
-	// Add signature if access token is available
-	if s.accessToken != "" {
-		sig, exp := getSignature(path, "read", user, s.accessToken, cfg.signatureExpiration)
-		params = append(params, fmt.Sprintf("signature=%s", sig))
-		if exp > 0 {
-			params = append(params, fmt.Sprintf("signature_expiration=%d", exp))
-		}
-	}
-
-	return baseURL + "?" + joinParams(params), nil
-}
-
-// joinParams joins URL query parameters with &.
-func joinParams(params []string) string {
-	result := ""
-	for i, p := range params {
-		if i > 0 {
-			result += "&"
-		}
-		result += p
-	}
-	return result
+	u.RawQuery = params.Encode()
+	return u.String(), nil
 }
 
 // compareVersion compares the envd version with the given version.

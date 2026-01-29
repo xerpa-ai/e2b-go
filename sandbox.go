@@ -105,19 +105,19 @@ type sandboxCreateResponse struct {
 	Domain             string `json:"domain"`
 }
 
-// New creates a new Sandbox instance.
+// NewWithContext creates a new Sandbox instance with context support.
 //
 // The API key can be provided via the WithAPIKey option or the E2B_API_KEY
 // environment variable.
 //
 // Example:
 //
-//	sandbox, err := e2b.New(e2b.WithAPIKey("your-api-key"))
+//	sandbox, err := e2b.NewWithContext(ctx, e2b.WithAPIKey("your-api-key"))
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	defer sandbox.Close()
-func New(opts ...Option) (*Sandbox, error) {
+func NewWithContext(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	cfg := defaultSandboxConfig()
 
 	for _, opt := range opts {
@@ -171,7 +171,7 @@ func New(opts ...Option) (*Sandbox, error) {
 		}
 	}
 
-	createResp, err := createSandbox(context.Background(), cfg.httpClient, cfg.apiURL, cfg.apiKey, createReq)
+	createResp, err := createSandbox(ctx, cfg.httpClient, cfg.apiURL, cfg.apiKey, createReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sandbox: %w", err)
 	}
@@ -204,6 +204,24 @@ func New(opts ...Option) (*Sandbox, error) {
 	sandbox.Pty = newPty(sandbox)
 
 	return sandbox, nil
+}
+
+// New creates a new Sandbox instance.
+//
+// The API key can be provided via the WithAPIKey option or the E2B_API_KEY
+// environment variable.
+//
+// Example:
+//
+//	sandbox, err := e2b.New(e2b.WithAPIKey("your-api-key"))
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer sandbox.Close()
+//
+// Deprecated: Use NewWithContext for better context control.
+func New(opts ...Option) (*Sandbox, error) {
+	return NewWithContext(context.Background(), opts...)
 }
 
 // createSandbox calls the E2B API to create a new sandbox.
@@ -245,17 +263,17 @@ func createSandbox(ctx context.Context, client *http.Client, apiURL, apiKey stri
 	return &createResp, nil
 }
 
-// Connect connects to an existing sandbox by ID.
+// ConnectWithContext connects to an existing sandbox by ID with context support.
 // If the sandbox is paused, it will be automatically resumed.
 //
 // Example:
 //
-//	sandbox, err := e2b.Connect("sandbox-id", e2b.WithAPIKey("your-api-key"))
+//	sandbox, err := e2b.ConnectWithContext(ctx, "sandbox-id", e2b.WithAPIKey("your-api-key"))
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	defer sandbox.Close()
-func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
+func ConnectWithContext(ctx context.Context, sandboxID string, opts ...Option) (*Sandbox, error) {
 	cfg := defaultSandboxConfig()
 
 	for _, opt := range opts {
@@ -292,7 +310,7 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 	}
 
 	// Connect to sandbox via E2B API
-	connectResp, err := connectSandbox(context.Background(), cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID, int(cfg.timeoutMs.Seconds()))
+	connectResp, err := connectSandbox(ctx, cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID, int(cfg.timeoutMs.Seconds()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sandbox: %w", err)
 	}
@@ -325,6 +343,22 @@ func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
 	sandbox.Pty = newPty(sandbox)
 
 	return sandbox, nil
+}
+
+// Connect connects to an existing sandbox by ID.
+// If the sandbox is paused, it will be automatically resumed.
+//
+// Example:
+//
+//	sandbox, err := e2b.Connect("sandbox-id", e2b.WithAPIKey("your-api-key"))
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer sandbox.Close()
+//
+// Deprecated: Use ConnectWithContext for better context control.
+func Connect(sandboxID string, opts ...Option) (*Sandbox, error) {
+	return ConnectWithContext(context.Background(), sandboxID, opts...)
 }
 
 // connectSandbox calls the E2B API to connect to an existing sandbox.
@@ -682,10 +716,10 @@ func (s *Sandbox) RestartContext(ctx context.Context, contextID string) error {
 	return nil
 }
 
-// Close closes the sandbox and releases resources.
+// CloseWithContext closes the sandbox and releases resources with context support.
 //
-// After calling Close, the sandbox cannot be used for further operations.
-func (s *Sandbox) Close() error {
+// After calling CloseWithContext, the sandbox cannot be used for further operations.
+func (s *Sandbox) CloseWithContext(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -697,10 +731,19 @@ func (s *Sandbox) Close() error {
 
 	// Kill the sandbox via E2B API (skip in debug mode)
 	if !s.config.debug && s.ID != "" && s.config != nil && s.config.apiKey != "" {
-		_ = killSandbox(context.Background(), s.config.httpClient, s.config.apiURL, s.config.apiKey, s.ID)
+		_ = killSandbox(ctx, s.config.httpClient, s.config.apiURL, s.config.apiKey, s.ID)
 	}
 
 	return nil
+}
+
+// Close closes the sandbox and releases resources.
+//
+// After calling Close, the sandbox cannot be used for further operations.
+//
+// Deprecated: Use CloseWithContext for better context control.
+func (s *Sandbox) Close() error {
+	return s.CloseWithContext(context.Background())
 }
 
 // killSandbox calls the E2B API to terminate a sandbox.

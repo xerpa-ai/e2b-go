@@ -369,9 +369,9 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 	handle := newCommandHandle(
 		pid,
 		stream,
-		func() (bool, error) {
+		func(ctx context.Context) (bool, error) {
 			streamCancel()
-			return c.Kill(context.Background(), pid)
+			return c.Kill(ctx, pid)
 		},
 		cfg.onStdout,
 		cfg.onStderr,
@@ -464,9 +464,9 @@ func (c *Commands) Connect(ctx context.Context, pid uint32, opts ...CommandConne
 	handle := newCommandHandleFromConnect(
 		startEvent.GetPid(),
 		stream,
-		func() (bool, error) {
+		func(ctx context.Context) (bool, error) {
 			streamCancel()
-			return c.Kill(context.Background(), pid)
+			return c.Kill(ctx, pid)
 		},
 		cfg.onStdout,
 		cfg.onStderr,

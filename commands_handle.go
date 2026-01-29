@@ -14,7 +14,7 @@ import (
 // retrieving stdout/stderr, and killing the command.
 type CommandHandle struct {
 	pid        uint32
-	handleKill func() (bool, error)
+	handleKill func(ctx context.Context) (bool, error)
 
 	mu       sync.RWMutex
 	stdout   strings.Builder
@@ -39,7 +39,7 @@ type CommandHandle struct {
 func newCommandHandle(
 	pid uint32,
 	stream *connect.ServerStreamForClient[processpb.StartResponse],
-	handleKill func() (bool, error),
+	handleKill func(ctx context.Context) (bool, error),
 	onStdout func(string),
 	onStderr func(string),
 ) *CommandHandle {
@@ -61,7 +61,7 @@ func newCommandHandle(
 func newCommandHandleFromConnect(
 	pid uint32,
 	stream *connect.ServerStreamForClient[processpb.ConnectResponse],
-	handleKill func() (bool, error),
+	handleKill func(ctx context.Context) (bool, error),
 	onStdout func(string),
 	onStderr func(string),
 ) *CommandHandle {
@@ -361,15 +361,24 @@ func (h *CommandHandle) Wait(ctx context.Context) (*CommandResult, error) {
 	return h.result, nil
 }
 
+// KillWithContext terminates the command with context support.
+// It uses SIGKILL signal to kill the command.
+// Returns true if the command was killed, false if the command was not found.
+func (h *CommandHandle) KillWithContext(ctx context.Context) (bool, error) {
+	// For PTY handles, use the PTY's Kill method
+	if h.isPty && h.pty != nil {
+		return h.pty.Kill(ctx, h.pid)
+	}
+	return h.handleKill(ctx)
+}
+
 // Kill terminates the command.
 // It uses SIGKILL signal to kill the command.
 // Returns true if the command was killed, false if the command was not found.
+//
+// Deprecated: Use KillWithContext for better context control.
 func (h *CommandHandle) Kill() (bool, error) {
-	// For PTY handles, use the PTY's Kill method
-	if h.isPty && h.pty != nil {
-		return h.pty.Kill(context.Background(), h.pid)
-	}
-	return h.handleKill()
+	return h.KillWithContext(context.Background())
 }
 
 // SendInput sends input data to the command/PTY.

@@ -10,12 +10,13 @@
 //
 //	import "github.com/xerpa-ai/e2b-go"
 //
-//	// Create a new sandbox (requires E2B_API_KEY environment variable)
-//	sandbox, err := e2b.New()
+//	// Create a new sandbox with context support (recommended)
+//	ctx := context.Background()
+//	sandbox, err := e2b.NewWithContext(ctx)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	defer sandbox.Close()
+//	defer sandbox.CloseWithContext(ctx)
 //
 //	// Execute Python code
 //	execution, err := sandbox.RunCode(context.Background(), "print('Hello, World!')")
@@ -48,11 +49,11 @@
 // in one context do not affect other contexts:
 //
 //	// Create a new context
-//	ctx, err := sandbox.CreateContext(context.Background(),
+//	execCtx, err := sandbox.CreateContext(ctx,
 //	    e2b.WithContextLanguage(e2b.LanguagePython))
 //
 //	// Execute code in the context
-//	sandbox.RunCode(context.Background(), "x = 42", e2b.WithContext(ctx))
+//	sandbox.RunCode(ctx, "x = 42", e2b.WithContext(execCtx))
 //
 // # Streaming Output
 //

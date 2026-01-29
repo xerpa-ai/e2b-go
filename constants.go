@@ -64,3 +64,24 @@ const (
 	LanguageBash       = "bash"
 	LanguageDeno       = "deno"
 )
+
+// Template constants.
+const (
+	// DefaultTemplateCPU is the default number of CPU cores for templates.
+	DefaultTemplateCPU = 2
+
+	// DefaultTemplateMemory is the default memory in MiB for templates.
+	DefaultTemplateMemory = 1024
+
+	// MinTemplateCPU is the minimum number of CPU cores allowed.
+	MinTemplateCPU = 1
+
+	// MaxTemplateCPU is the maximum number of CPU cores allowed.
+	MaxTemplateCPU = 32
+
+	// MinTemplateMemory is the minimum memory in MiB allowed.
+	MinTemplateMemory = 128
+
+	// DefaultBaseImage is the default Docker base image for templates.
+	DefaultBaseImage = "e2bdev/base"
+)

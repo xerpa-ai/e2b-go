@@ -269,6 +269,14 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		opt(cfg)
 	}
 
+	// Check version for stdin support.
+	// Explicitly setting stdin to false requires envd version >= 0.3.0.
+	// On older versions, stdin is always enabled and cannot be disabled.
+	if cfg.stdin != nil && !*cfg.stdin && c.compareVersion(EnvdVersionCommandsStdin) < 0 {
+		return nil, fmt.Errorf("%w: sandbox envd version %s cannot specify stdin=false, it's always enabled; please rebuild your template if you need this feature",
+			ErrInvalidArgument, c.envdVersion)
+	}
+
 	// Build the process config
 	// Python SDK uses: /bin/bash -l -c cmd
 	processConfig := &processpb.ProcessConfig{
@@ -282,9 +290,16 @@ func (c *Commands) start(ctx context.Context, cmd string, opts ...CommandOption)
 		processConfig.Cwd = &cfg.cwd
 	}
 
+	// Handle stdin default value (false when not explicitly set)
+	stdin := cfg.stdin
+	if stdin == nil {
+		defaultStdin := false
+		stdin = &defaultStdin
+	}
+
 	req := connect.NewRequest(&processpb.StartRequest{
 		Process: processConfig,
-		Stdin:   &cfg.stdin,
+		Stdin:   stdin,
 		Tag:     cfg.tag,
 	})
 	c.setStreamingHeadersWithUser(req, cfg.user)
@@ -535,6 +550,8 @@ func (c *Commands) wrapRPCError(ctx context.Context, err error) error {
 			return NewRequestTimeoutError()
 		case connect.CodeUnavailable:
 			return fmt.Errorf("sandbox unavailable: %s", connectErr.Message())
+		case connect.CodeResourceExhausted:
+			return fmt.Errorf("%w: %s; please try again later", ErrRateLimit, connectErr.Message())
 		default:
 			return fmt.Errorf("RPC error (%s): %s", connectErr.Code(), connectErr.Message())
 		}

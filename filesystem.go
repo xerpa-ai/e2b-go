@@ -17,9 +17,6 @@ import (
 	"github.com/xerpa-ai/e2b-go/internal/proto/filesystem/filesystempbconnect"
 )
 
-// EnvdPort is the port for the envd service.
-const EnvdPort = 49983
-
 // HTTP header constants
 const (
 	headerAccessToken  = "X-Access-Token"

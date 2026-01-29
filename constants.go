@@ -16,6 +16,9 @@ const (
 	// JupyterPort is the port where the Jupyter server runs.
 	JupyterPort = 49999
 
+	// EnvdPort is the port for the envd service.
+	EnvdPort = 49983
+
 	// DefaultSandboxTimeout is the default timeout for sandbox lifetime.
 	// After this timeout, the sandbox will be automatically killed.
 	DefaultSandboxTimeout = 300 * time.Second // 5 minutes
@@ -45,6 +48,10 @@ const (
 	// EnvdVersionRecursiveWatch is the envd version that supports recursive watch.
 	// Below this version, recursive watch is not supported.
 	EnvdVersionRecursiveWatch = "0.1.4"
+
+	// EnvdVersionCommandsStdin is the envd version that supports stdin control.
+	// Below this version, stdin is always enabled and cannot be disabled.
+	EnvdVersionCommandsStdin = "0.3.0"
 )
 
 // Language constants for code execution.
@@ -55,4 +62,5 @@ const (
 	LanguageR          = "r"
 	LanguageJava       = "java"
 	LanguageBash       = "bash"
+	LanguageDeno       = "deno"
 )

@@ -21,6 +21,9 @@ var (
 
 	// ErrSandboxClosed indicates the sandbox has been closed.
 	ErrSandboxClosed = errors.New("e2b: sandbox is closed")
+
+	// ErrRateLimit indicates that the rate limit has been exceeded.
+	ErrRateLimit = errors.New("e2b: rate limit exceeded")
 )
 
 // SandboxError represents an error returned by the sandbox API.

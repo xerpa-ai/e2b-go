@@ -11,7 +11,7 @@ type commandConfig struct {
 	requestTimeout time.Duration
 	onStdout       func(output string)
 	onStderr       func(output string)
-	stdin          bool
+	stdin          *bool
 	tag            *string
 }
 
@@ -20,7 +20,6 @@ type commandConfig struct {
 func defaultCommandConfig() *commandConfig {
 	return &commandConfig{
 		timeout: 60 * time.Second,
-		stdin:   false,
 	}
 }
 
@@ -54,9 +53,12 @@ func WithCommandUser(user string) CommandOption {
 // If true, the command will have a stdin stream that you can send data to
 // using Commands.SendStdin or CommandHandle.SendStdin.
 // Default is false.
+//
+// Note: Explicitly setting stdin to false requires envd version >= 0.3.0.
+// On older versions, stdin is always enabled and cannot be disabled.
 func WithStdin(enabled bool) CommandOption {
 	return func(c *commandConfig) {
-		c.stdin = enabled
+		c.stdin = &enabled
 	}
 }
 

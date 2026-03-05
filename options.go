@@ -225,6 +225,35 @@ func WithEnvVars(envVars map[string]string) Option {
 	}
 }
 
+// WithTraceparent sets the W3C Trace Context traceparent header as the
+// TRACEPARENT environment variable in the sandbox, enabling distributed
+// tracing propagation. The value must follow the W3C format:
+// {version}-{trace-id}-{parent-id}-{trace-flags}
+//
+// See https://www.w3.org/TR/trace-context/#traceparent-header
+func WithTraceparent(tp string) Option {
+	return func(c *sandboxConfig) {
+		if c.envVars == nil {
+			c.envVars = make(map[string]string)
+		}
+		c.envVars["TRACEPARENT"] = tp
+	}
+}
+
+// WithTracestate sets the W3C Trace Context tracestate header as the
+// TRACESTATE environment variable in the sandbox. The value contains
+// vendor-specific trace context data as comma-separated key=value pairs.
+//
+// See https://www.w3.org/TR/trace-context/#tracestate-header
+func WithTracestate(ts string) Option {
+	return func(c *sandboxConfig) {
+		if c.envVars == nil {
+			c.envVars = make(map[string]string)
+		}
+		c.envVars["TRACESTATE"] = ts
+	}
+}
+
 // WithNetwork sets network options for the sandbox.
 // This allows fine-grained control over network access.
 //

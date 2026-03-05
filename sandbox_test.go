@@ -267,6 +267,37 @@ func TestRunOptions(t *testing.T) {
 	}
 }
 
+func TestWithTraceparent(t *testing.T) {
+	cfg := defaultSandboxConfig()
+	WithTraceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")(cfg)
+
+	if cfg.envVars["TRACEPARENT"] != "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" {
+		t.Fatalf("WithTraceparent() = %q, want traceparent value", cfg.envVars["TRACEPARENT"])
+	}
+}
+
+func TestWithTracestate(t *testing.T) {
+	cfg := defaultSandboxConfig()
+	WithTracestate("congo=t61rcWkgMzE")(cfg)
+
+	if cfg.envVars["TRACESTATE"] != "congo=t61rcWkgMzE" {
+		t.Fatalf("WithTracestate() = %q, want tracestate value", cfg.envVars["TRACESTATE"])
+	}
+}
+
+func TestWithTraceparentMergesWithEnvVars(t *testing.T) {
+	cfg := defaultSandboxConfig()
+	WithEnvVars(map[string]string{"APP_ENV": "production"})(cfg)
+	WithTraceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")(cfg)
+
+	if cfg.envVars["APP_ENV"] != "production" {
+		t.Fatal("WithTraceparent() should not clear existing env vars")
+	}
+	if cfg.envVars["TRACEPARENT"] != "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" {
+		t.Fatal("WithTraceparent() should merge into existing env vars")
+	}
+}
+
 func TestContextOptions(t *testing.T) {
 	cfg := defaultContextConfig()
 

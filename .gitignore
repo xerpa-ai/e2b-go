@@ -517,3 +517,6 @@ $RECYCLE.BIN/
 
 # References
 _references/
+
+# Compiled test binaries
+test/integration/

@@ -921,7 +921,7 @@ func (s *Sandbox) IsRunning(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
 		return false, fmt.Errorf("health check failed (status %d): %s", resp.StatusCode, string(body))
 	}

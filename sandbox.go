@@ -912,18 +912,17 @@ func (s *Sandbox) IsRunning(ctx context.Context) (bool, error) {
 
 	resp, err := s.config.httpClient.Do(req)
 	if err != nil {
-		return false, nil // Connection error likely means sandbox is not running
+		return false, err
 	}
 	defer resp.Body.Close()
 
-	// 502 means sandbox is not running
 	if resp.StatusCode == http.StatusBadGateway {
 		return false, nil
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		return false, fmt.Errorf("health check failed (status %d): %s", resp.StatusCode, string(body))
+		return false, formatHTTPError(resp.StatusCode, string(body))
 	}
 
 	return true, nil

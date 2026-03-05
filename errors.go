@@ -24,6 +24,12 @@ var (
 
 	// ErrRateLimit indicates that the rate limit has been exceeded.
 	ErrRateLimit = errors.New("e2b: rate limit exceeded")
+
+	// ErrAuthentication indicates an authentication failure.
+	ErrAuthentication = errors.New("e2b: authentication error")
+
+	// ErrNotEnoughSpace indicates insufficient disk space in the sandbox.
+	ErrNotEnoughSpace = errors.New("e2b: not enough disk space")
 )
 
 // SandboxError represents an error returned by the sandbox API.
@@ -53,16 +59,22 @@ func (e *SandboxError) Unwrap() error {
 
 // Is checks if the error matches the target.
 func (e *SandboxError) Is(target error) bool {
-	if target == ErrNotFound && e.StatusCode == 404 {
+	switch {
+	case target == ErrInvalidArgument && e.StatusCode == 400:
 		return true
-	}
-	if target == ErrTimeout && e.StatusCode == 502 {
+	case target == ErrAuthentication && e.StatusCode == 401:
 		return true
-	}
-	if target == ErrRateLimit && e.StatusCode == 429 {
+	case target == ErrNotFound && e.StatusCode == 404:
 		return true
+	case target == ErrRateLimit && e.StatusCode == 429:
+		return true
+	case target == ErrTimeout && e.StatusCode == 502:
+		return true
+	case target == ErrNotEnoughSpace && e.StatusCode == 507:
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // NewSandboxError creates a new SandboxError.
@@ -124,6 +136,18 @@ func formatHTTPError(statusCode int, body string) error {
 	}
 
 	switch statusCode {
+	case 400:
+		return &SandboxError{
+			StatusCode: statusCode,
+			Message:    message,
+			Err:        ErrInvalidArgument,
+		}
+	case 401:
+		return &SandboxError{
+			StatusCode: statusCode,
+			Message:    message,
+			Err:        ErrAuthentication,
+		}
 	case 404:
 		return &SandboxError{
 			StatusCode: statusCode,
@@ -141,6 +165,12 @@ func formatHTTPError(statusCode int, body string) error {
 			StatusCode: statusCode,
 			Message:    fmt.Sprintf("%s: this error is likely due to sandbox timeout, you can modify the sandbox timeout by passing a timeout option when starting the sandbox", message),
 			Err:        ErrTimeout,
+		}
+	case 507:
+		return &SandboxError{
+			StatusCode: statusCode,
+			Message:    message,
+			Err:        ErrNotEnoughSpace,
 		}
 	default:
 		return &SandboxError{

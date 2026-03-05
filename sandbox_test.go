@@ -9,48 +9,82 @@ import (
 	"time"
 )
 
-func TestNewSandbox(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    []Option
-		wantErr bool
-	}{
-		{
-			name:    "without API key",
-			opts:    []Option{},
-			wantErr: true,
-		},
-		{
-			name:    "with API key",
-			opts:    []Option{WithAPIKey("test-api-key")},
-			wantErr: false,
-		},
-		{
-			name: "with custom timeout",
-			opts: []Option{
-				WithAPIKey("test-api-key"),
-				WithTimeout(10 * time.Second),
-			},
-			wantErr: false,
-		},
-	}
+func newMockAPIServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/sandboxes":
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{
+				"sandboxID":          "test-sandbox-id",
+				"templateID":         "base",
+				"clientID":           "test-client",
+				"envdVersion":        "0.5.0",
+				"envdAccessToken":    "test-envd-token",
+				"trafficAccessToken": "test-traffic-token",
+				"domain":             "e2b.test",
+			})
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sandbox, err := New(tt.opts...)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if sandbox != nil {
-				sandbox.Close()
-			}
-		})
-	}
+func TestNewSandbox(t *testing.T) {
+	server := newMockAPIServer(t)
+	defer server.Close()
+
+	t.Run("without API key", func(t *testing.T) {
+		// Clear env vars and use a non-existent home to avoid CLI config fallback
+		t.Setenv("E2B_API_KEY", "")
+		t.Setenv("E2B_ACCESS_TOKEN", "")
+		t.Setenv("HOME", t.TempDir())
+
+		_, err := New(WithAPIURL(server.URL))
+		if err == nil {
+			t.Error("New() expected error without API key, got nil")
+		}
+	})
+
+	t.Run("with API key", func(t *testing.T) {
+		sandbox, err := New(WithAPIKey("test-api-key"), WithAPIURL(server.URL))
+		if err != nil {
+			t.Errorf("New() unexpected error = %v", err)
+			return
+		}
+		if sandbox != nil {
+			sandbox.Close()
+		}
+	})
+
+	t.Run("with custom timeout", func(t *testing.T) {
+		sandbox, err := New(
+			WithAPIKey("test-api-key"),
+			WithAPIURL(server.URL),
+			WithTimeout(10*time.Second),
+		)
+		if err != nil {
+			t.Errorf("New() unexpected error = %v", err)
+			return
+		}
+		if sandbox == nil {
+			t.Error("New() returned nil sandbox")
+			return
+		}
+		if sandbox.Timeout() != 10*time.Second {
+			t.Errorf("Timeout() = %v, want 10s", sandbox.Timeout())
+		}
+		sandbox.Close()
+	})
 }
 
 func TestSandboxClose(t *testing.T) {
-	sandbox, err := New(WithAPIKey("test-api-key"))
+	server := newMockAPIServer(t)
+	defer server.Close()
+
+	sandbox, err := New(WithAPIKey("test-api-key"), WithAPIURL(server.URL))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -63,14 +97,16 @@ func TestSandboxClose(t *testing.T) {
 		t.Error("IsClosed() should return true after Close()")
 	}
 
-	// Closing again should not error
 	if err := sandbox.Close(); err != nil {
 		t.Errorf("Close() second call error = %v", err)
 	}
 }
 
 func TestSandboxRunCodeClosed(t *testing.T) {
-	sandbox, err := New(WithAPIKey("test-api-key"))
+	server := newMockAPIServer(t)
+	defer server.Close()
+
+	sandbox, err := New(WithAPIKey("test-api-key"), WithAPIURL(server.URL))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

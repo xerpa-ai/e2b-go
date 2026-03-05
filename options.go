@@ -1,9 +1,11 @@
 package e2b
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -21,25 +23,45 @@ type NetworkOptions struct {
 	MaskRequestHost string
 }
 
+// SandboxLifecycle configures the sandbox lifecycle behavior.
+type SandboxLifecycle struct {
+	// OnTimeout specifies what happens when the sandbox times out.
+	// "kill" (default) terminates the sandbox, "pause" pauses it.
+	OnTimeout string
+	// AutoResume enables automatic resumption of paused sandboxes when accessed.
+	// Only valid when OnTimeout is "pause". Defaults to false.
+	AutoResume bool
+}
+
+// VolumeMountConfig specifies a volume to mount in a sandbox.
+type VolumeMountConfig struct {
+	// Name is the volume name.
+	Name string `json:"name"`
+	// Path is the mount path inside the sandbox.
+	Path string `json:"path"`
+}
+
 // sandboxConfig holds configuration for creating a Sandbox.
 type sandboxConfig struct {
-	apiKey              string            // E2B API key for authentication
-	accessToken         string            // envd access token for sandbox operations
-	domain              string            // base domain for E2B services (default: e2b.app)
-	apiURL              string            // E2B API URL (default: https://api.{domain})
-	sandboxURL          string            // sandbox connection URL override
-	template            string            // sandbox template name or ID
-	timeoutMs           time.Duration     // sandbox lifetime timeout
-	requestTimeout      time.Duration     // default timeout for HTTP requests
-	httpClient          *http.Client      // HTTP client for API requests
-	debug               bool              // enable debug mode (uses HTTP instead of HTTPS)
-	secure              bool              // enable secure mode for sandbox traffic
-	allowInternetAccess bool              // allow sandbox to access the internet
-	autoPause           bool              // automatically pause sandbox after timeout
-	metadata            map[string]string // custom metadata for the sandbox
-	envVars             map[string]string // default environment variables
-	network             *NetworkOptions   // network access configuration
-	mcp                 map[string]any    // MCP server configuration
+	apiKey              string              // E2B API key for authentication
+	accessToken         string              // envd access token for sandbox operations
+	domain              string              // base domain for E2B services (default: e2b.app)
+	apiURL              string              // E2B API URL (default: https://api.{domain})
+	sandboxURL          string              // sandbox connection URL override
+	template            string              // sandbox template name or ID
+	timeoutMs           time.Duration       // sandbox lifetime timeout
+	requestTimeout      time.Duration       // default timeout for HTTP requests
+	httpClient          *http.Client        // HTTP client for API requests
+	debug               bool                // enable debug mode (uses HTTP instead of HTTPS)
+	secure              bool                // enable secure mode for sandbox traffic
+	allowInternetAccess bool                // allow sandbox to access the internet
+	autoPause           bool                // automatically pause sandbox after timeout (deprecated)
+	lifecycle           *SandboxLifecycle   // lifecycle configuration (replaces autoPause)
+	volumeMounts        []VolumeMountConfig // volumes to mount in the sandbox
+	metadata            map[string]string   // custom metadata for the sandbox
+	envVars             map[string]string   // default environment variables
+	network             *NetworkOptions     // network access configuration
+	mcp                 map[string]any      // MCP server configuration
 }
 
 // defaultSandboxConfig returns the default sandbox configuration.
@@ -54,8 +76,8 @@ func defaultSandboxConfig() *sandboxConfig {
 	}
 }
 
-// applyEnvironment applies configuration from environment variables.
-// Values are only applied if not already set via options.
+// applyEnvironment applies configuration from environment variables and CLI config.
+// Resolution order: direct param > env var > CLI config file (~/.e2b/config.json).
 func (c *sandboxConfig) applyEnvironment() {
 	if c.apiKey == "" {
 		c.apiKey = os.Getenv("E2B_API_KEY")
@@ -77,6 +99,48 @@ func (c *sandboxConfig) applyEnvironment() {
 	if !c.debug {
 		c.debug = os.Getenv("E2B_DEBUG") == "true"
 	}
+
+	// Fallback to CLI config file if credentials are still missing
+	if c.apiKey == "" || c.accessToken == "" {
+		if cliCfg := readCLIConfig(); cliCfg != nil {
+			if c.apiKey == "" && cliCfg.TeamAPIKey != "" {
+				c.apiKey = cliCfg.TeamAPIKey
+			}
+			if c.accessToken == "" && cliCfg.AccessToken != "" {
+				c.accessToken = cliCfg.AccessToken
+			}
+		}
+	}
+}
+
+// cliConfig represents the E2B CLI configuration file at ~/.e2b/config.json.
+type cliConfig struct {
+	Email       string `json:"email"`
+	AccessToken string `json:"accessToken"`
+	TeamName    string `json:"teamName"`
+	TeamID      string `json:"teamId"`
+	TeamAPIKey  string `json:"teamApiKey"`
+}
+
+// readCLIConfig reads the E2B CLI config from ~/.e2b/config.json.
+// Returns nil if the file doesn't exist or can't be read.
+func readCLIConfig() *cliConfig {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".e2b", "config.json"))
+	if err != nil {
+		return nil
+	}
+
+	var cfg cliConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+
+	return &cfg
 }
 
 // computeAPIURL sets the API URL if not already configured.
@@ -204,9 +268,39 @@ func WithAllowInternetAccess(allow bool) Option {
 // WithAutoPause enables automatic pausing of the sandbox after the timeout.
 // When enabled, the sandbox will be paused instead of killed after timeout.
 // Defaults to false.
+//
+// Deprecated: Use WithLifecycle instead.
 func WithAutoPause(autoPause bool) Option {
 	return func(c *sandboxConfig) {
 		c.autoPause = autoPause
+	}
+}
+
+// WithLifecycle sets the sandbox lifecycle configuration.
+// This replaces WithAutoPause with a more structured approach.
+//
+// Example:
+//
+//	sandbox, err := e2b.NewWithContext(ctx, e2b.WithLifecycle(e2b.SandboxLifecycle{
+//	    OnTimeout:  "pause",
+//	    AutoResume: true,
+//	}))
+func WithLifecycle(lifecycle SandboxLifecycle) Option {
+	return func(c *sandboxConfig) {
+		c.lifecycle = &lifecycle
+	}
+}
+
+// WithVolumeMounts sets volumes to mount in the sandbox.
+//
+// Example:
+//
+//	sandbox, err := e2b.NewWithContext(ctx, e2b.WithVolumeMounts([]e2b.VolumeMountConfig{
+//	    {Name: "my-volume", Path: "/mnt/data"},
+//	}))
+func WithVolumeMounts(mounts []VolumeMountConfig) Option {
+	return func(c *sandboxConfig) {
+		c.volumeMounts = mounts
 	}
 }
 

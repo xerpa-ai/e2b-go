@@ -39,6 +39,8 @@ type Sandbox struct {
 	Commands *Commands
 	// Pty provides pseudo-terminal operations for the sandbox.
 	Pty *Pty
+	// Git provides git operations for the sandbox.
+	Git *Git
 
 	// mu protects concurrent access to sandbox state.
 	mu sync.RWMutex
@@ -62,6 +64,11 @@ type networkRequestOptions struct {
 	MaskRequestHost    string   `json:"maskRequestHost,omitempty"`
 }
 
+// autoResumeConfig represents the auto-resume configuration in the API request.
+type autoResumeConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
 // sandboxCreateRequest represents the request body for creating a sandbox.
 type sandboxCreateRequest struct {
 	TemplateID          string                 `json:"templateID"`
@@ -71,6 +78,8 @@ type sandboxCreateRequest struct {
 	Secure              bool                   `json:"secure"`
 	AllowInternetAccess bool                   `json:"allow_internet_access"`
 	AutoPause           bool                   `json:"autoPause"`
+	AutoResume          *autoResumeConfig      `json:"autoResume,omitempty"`
+	VolumeMounts        []VolumeMountConfig    `json:"volumeMounts,omitempty"`
 	Network             *networkRequestOptions `json:"network,omitempty"`
 	Mcp                 map[string]any         `json:"mcp,omitempty"`
 }
@@ -141,12 +150,23 @@ func NewWithContext(ctx context.Context, opts ...Option) (*Sandbox, error) {
 		sandbox.Files = newFilesystem(sandbox)
 		sandbox.Commands = newCommands(sandbox)
 		sandbox.Pty = newPty(sandbox)
+		sandbox.Git = newGit(sandbox)
 		return sandbox, nil
 	}
 
 	// Validate API key (required for non-debug mode)
 	if cfg.apiKey == "" {
 		return nil, fmt.Errorf("%w: API key is required (use WithAPIKey or set E2B_API_KEY)", ErrInvalidArgument)
+	}
+
+	// Resolve lifecycle configuration
+	autoPause := cfg.autoPause
+	var autoResume *autoResumeConfig
+	if cfg.lifecycle != nil {
+		autoPause = cfg.lifecycle.OnTimeout == "pause"
+		if autoPause {
+			autoResume = &autoResumeConfig{Enabled: cfg.lifecycle.AutoResume}
+		}
 	}
 
 	// Create sandbox via E2B API
@@ -157,7 +177,9 @@ func NewWithContext(ctx context.Context, opts ...Option) (*Sandbox, error) {
 		EnvVars:             cfg.envVars,
 		Secure:              cfg.secure,
 		AllowInternetAccess: cfg.allowInternetAccess,
-		AutoPause:           cfg.autoPause,
+		AutoPause:           autoPause,
+		AutoResume:          autoResume,
+		VolumeMounts:        cfg.volumeMounts,
 		Mcp:                 cfg.mcp,
 	}
 
@@ -202,6 +224,9 @@ func NewWithContext(ctx context.Context, opts ...Option) (*Sandbox, error) {
 
 	// Initialize the PTY
 	sandbox.Pty = newPty(sandbox)
+
+	// Initialize Git
+	sandbox.Git = newGit(sandbox)
 
 	return sandbox, nil
 }
@@ -251,8 +276,12 @@ func createSandbox(ctx context.Context, client *http.Client, apiURL, apiKey stri
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("%w: %s", ErrRateLimit, stringOrDefault(string(respBody), "rate limit exceeded"))
+	}
+
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, stringOrDefault(string(respBody), "unknown error"))
 	}
 
 	var createResp sandboxCreateResponse
@@ -301,6 +330,7 @@ func ConnectWithContext(ctx context.Context, sandboxID string, opts ...Option) (
 		sandbox.Files = newFilesystem(sandbox)
 		sandbox.Commands = newCommands(sandbox)
 		sandbox.Pty = newPty(sandbox)
+		sandbox.Git = newGit(sandbox)
 		return sandbox, nil
 	}
 
@@ -341,6 +371,9 @@ func ConnectWithContext(ctx context.Context, sandboxID string, opts ...Option) (
 
 	// Initialize the PTY
 	sandbox.Pty = newPty(sandbox)
+
+	// Initialize Git
+	sandbox.Git = newGit(sandbox)
 
 	return sandbox, nil
 }
@@ -391,6 +424,10 @@ func connectSandbox(ctx context.Context, client *http.Client, apiURL, apiKey, sa
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("%w: sandbox %s not found", ErrNotFound, sandboxID)
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("%w: team sandbox limit reached, cannot auto-resume", ErrRateLimit)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -1063,18 +1100,19 @@ func getSignature(path, operation, user, accessToken string, expirationSeconds i
 
 // SandboxInfo contains information about a sandbox.
 type SandboxInfo struct {
-	SandboxID   string            `json:"sandboxID"`
-	TemplateID  string            `json:"templateID"`
-	Alias       string            `json:"alias,omitempty"`
-	ClientID    string            `json:"clientID"`
-	StartedAt   string            `json:"startedAt"`
-	EndAt       string            `json:"endAt"`
-	CpuCount    int               `json:"cpuCount"`
-	MemoryMB    int               `json:"memoryMB"`
-	DiskSizeMB  int               `json:"diskSizeMB"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	State       SandboxState      `json:"state"`
-	EnvdVersion string            `json:"envdVersion"`
+	SandboxID    string              `json:"sandboxID"`
+	TemplateID   string              `json:"templateID"`
+	Alias        string              `json:"alias,omitempty"`
+	ClientID     string              `json:"clientID"`
+	StartedAt    string              `json:"startedAt"`
+	EndAt        string              `json:"endAt"`
+	CpuCount     int                 `json:"cpuCount"`
+	MemoryMB     int                 `json:"memoryMB"`
+	DiskSizeMB   int                 `json:"diskSizeMB"`
+	Metadata     map[string]string   `json:"metadata,omitempty"`
+	State        SandboxState        `json:"state"`
+	EnvdVersion  string              `json:"envdVersion"`
+	VolumeMounts []VolumeMountConfig `json:"volumeMounts,omitempty"`
 }
 
 // GetInfo returns information about this sandbox.
@@ -1281,19 +1319,40 @@ func Kill(ctx context.Context, sandboxID string, opts ...Option) error {
 	return killSandbox(ctx, cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID)
 }
 
-// BetaPause pauses this sandbox.
-// This is a beta feature and may change in the future.
+// Pause pauses this sandbox.
 //
 // A paused sandbox can be resumed by calling Connect with the sandbox ID.
 //
 // Example:
 //
-//	err := sandbox.BetaPause(ctx)
+//	err := sandbox.Pause(ctx)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	// Later, resume with:
-//	// sandbox, err := e2b.Connect(sandboxID)
+//	// sandbox, err := e2b.ConnectWithContext(ctx, sandboxID)
+func (s *Sandbox) Pause(ctx context.Context) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrSandboxClosed
+	}
+	apiKey := s.config.apiKey
+	apiURL := s.config.apiURL
+	client := s.config.httpClient
+	debug := s.config.debug
+	s.mu.RUnlock()
+
+	if debug {
+		return nil
+	}
+
+	return pauseSandbox(ctx, client, apiURL, apiKey, s.ID)
+}
+
+// BetaPause pauses this sandbox.
+//
+// Deprecated: Use Pause instead.
 func (s *Sandbox) BetaPause(ctx context.Context) error {
 	s.mu.RLock()
 	if s.closed {
@@ -1313,9 +1372,32 @@ func (s *Sandbox) BetaPause(ctx context.Context) error {
 	return pauseSandbox(ctx, client, apiURL, apiKey, s.ID)
 }
 
-// BetaPause pauses a sandbox by ID.
-// This is a beta feature and may change in the future.
+// Pause pauses a sandbox by ID.
 // This is a static method that can be called without a sandbox instance.
+func Pause(ctx context.Context, sandboxID string, opts ...Option) error {
+	cfg := defaultSandboxConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	cfg.applyEnvironment()
+	cfg.computeAPIURL()
+	cfg.ensureHTTPClient()
+
+	if cfg.debug {
+		return nil
+	}
+
+	if cfg.apiKey == "" {
+		return fmt.Errorf("%w: API key is required", ErrInvalidArgument)
+	}
+
+	return pauseSandbox(ctx, cfg.httpClient, cfg.apiURL, cfg.apiKey, sandboxID)
+}
+
+// BetaPause pauses a sandbox by ID.
+//
+// Deprecated: Use Pause instead.
 func BetaPause(ctx context.Context, sandboxID string, opts ...Option) error {
 	cfg := defaultSandboxConfig()
 	for _, opt := range opts {
@@ -1432,4 +1514,12 @@ func (s *Sandbox) GetMcpUrl() string {
 		protocol = "http"
 	}
 	return fmt.Sprintf("%s://%s-mcp.%s", protocol, s.ID, s.Domain)
+}
+
+func stringOrDefault(s, def string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def
+	}
+	return s
 }

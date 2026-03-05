@@ -59,6 +59,9 @@ func (e *SandboxError) Is(target error) bool {
 	if target == ErrTimeout && e.StatusCode == 502 {
 		return true
 	}
+	if target == ErrRateLimit && e.StatusCode == 429 {
+		return true
+	}
 	return false
 }
 
@@ -115,23 +118,34 @@ func NewRequestTimeoutError() *TimeoutError {
 
 // formatHTTPError converts an HTTP response to an appropriate error.
 func formatHTTPError(statusCode int, body string) error {
+	message := body
+	if message == "" {
+		message = fmt.Sprintf("HTTP %d", statusCode)
+	}
+
 	switch statusCode {
 	case 404:
 		return &SandboxError{
 			StatusCode: statusCode,
-			Message:    body,
+			Message:    message,
 			Err:        ErrNotFound,
+		}
+	case 429:
+		return &SandboxError{
+			StatusCode: statusCode,
+			Message:    message,
+			Err:        ErrRateLimit,
 		}
 	case 502:
 		return &SandboxError{
 			StatusCode: statusCode,
-			Message:    fmt.Sprintf("%s: this error is likely due to sandbox timeout, you can modify the sandbox timeout by passing a timeout option when starting the sandbox", body),
+			Message:    fmt.Sprintf("%s: this error is likely due to sandbox timeout, you can modify the sandbox timeout by passing a timeout option when starting the sandbox", message),
 			Err:        ErrTimeout,
 		}
 	default:
 		return &SandboxError{
 			StatusCode: statusCode,
-			Message:    body,
+			Message:    message,
 		}
 	}
 }

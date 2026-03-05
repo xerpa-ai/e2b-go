@@ -1044,6 +1044,234 @@ func setTemplateHeaders(req *http.Request, cfg *templateConfig) {
 	}
 }
 
+// ============== Template Tags ==============
+
+// TemplateTag represents a tag assigned to a template build.
+type TemplateTag struct {
+	// Tag is the tag name.
+	Tag string `json:"tag"`
+	// BuildID is the build identifier this tag points to.
+	BuildID string `json:"buildID"`
+	// CreatedAt is when the tag was created.
+	CreatedAt string `json:"createdAt"`
+}
+
+// TemplateTagInfo contains information returned after assigning tags.
+type TemplateTagInfo struct {
+	// BuildID is the build identifier.
+	BuildID string `json:"buildID"`
+	// Tags are the assigned tag names.
+	Tags []string `json:"tags"`
+}
+
+// templateAssignTagsRequest represents the request body for assigning tags.
+type templateAssignTagsRequest struct {
+	Target string   `json:"target"`
+	Tags   []string `json:"tags"`
+}
+
+// templateRemoveTagsRequest represents the request body for removing tags.
+type templateRemoveTagsRequest struct {
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
+
+// GetTemplateTags returns all tags for a template.
+//
+// Example:
+//
+//	tags, err := e2b.GetTemplateTags(ctx, "template-id")
+//	for _, t := range tags {
+//	    fmt.Printf("Tag: %s, Build: %s\n", t.Tag, t.BuildID)
+//	}
+func GetTemplateTags(ctx context.Context, templateID string, opts ...TemplateOption) ([]TemplateTag, error) {
+	cfg := templateConfigFromOptions(opts)
+
+	if cfg.apiKey == "" && cfg.accessToken == "" {
+		return nil, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
+	}
+
+	endpoint, _ := url.JoinPath(cfg.apiURL, "templates", templateID, "tags")
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	setTemplateHeaders(httpReq, cfg)
+
+	resp, err := cfg.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var tags []TemplateTag
+	if err := json.Unmarshal(respBody, &tags); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return tags, nil
+}
+
+// AssignTemplateTags assigns tags to a template build.
+//
+// Example:
+//
+//	info, err := e2b.AssignTemplateTags(ctx, "my-template:latest", []string{"v1.0", "stable"})
+func AssignTemplateTags(ctx context.Context, targetName string, tags []string, opts ...TemplateOption) (*TemplateTagInfo, error) {
+	cfg := templateConfigFromOptions(opts)
+
+	if cfg.apiKey == "" && cfg.accessToken == "" {
+		return nil, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
+	}
+
+	data, err := json.Marshal(&templateAssignTagsRequest{Target: targetName, Tags: tags})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint := cfg.apiURL + "/templates/tags"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	setTemplateHeaders(httpReq, cfg)
+
+	resp, err := cfg.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var info TemplateTagInfo
+	if err := json.Unmarshal(respBody, &info); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &info, nil
+}
+
+// RemoveTemplateTags removes tags from a template.
+//
+// Example:
+//
+//	err := e2b.RemoveTemplateTags(ctx, "my-template", []string{"old-tag"})
+func RemoveTemplateTags(ctx context.Context, name string, tags []string, opts ...TemplateOption) error {
+	cfg := templateConfigFromOptions(opts)
+
+	if cfg.apiKey == "" && cfg.accessToken == "" {
+		return fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
+	}
+
+	data, err := json.Marshal(&templateRemoveTagsRequest{Name: name, Tags: tags})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint := cfg.apiURL + "/templates/tags"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	setTemplateHeaders(httpReq, cfg)
+
+	resp, err := cfg.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// ============== V2 Template Update ==============
+
+// TemplateUpdateResponse represents the response from the v2 template update endpoint.
+type TemplateUpdateResponse struct {
+	// Names are the template names in namespace/alias format.
+	Names []string `json:"names"`
+}
+
+// UpdateTemplateV2 updates a template's properties using the v2 API.
+// Returns the updated template names.
+//
+// Example:
+//
+//	resp, err := e2b.UpdateTemplateV2(ctx, "template-id", &e2b.TemplateUpdate{
+//	    Public: &true,
+//	})
+func UpdateTemplateV2(ctx context.Context, templateID string, update *TemplateUpdate, opts ...TemplateOption) (*TemplateUpdateResponse, error) {
+	cfg := templateConfigFromOptions(opts)
+
+	if cfg.apiKey == "" && cfg.accessToken == "" {
+		return nil, fmt.Errorf("%w: API key or access token is required", ErrInvalidArgument)
+	}
+
+	data, err := json.Marshal(update)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint, _ := url.JoinPath(cfg.apiURL, "v2", "templates", templateID)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	setTemplateHeaders(httpReq, cfg)
+
+	resp, err := cfg.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return nil, fmt.Errorf("api error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result TemplateUpdateResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// ============== Helper Functions ==============
+
 // joinStrings joins strings with a separator.
 func joinStrings(strs []string, sep string) string {
 	if len(strs) == 0 {

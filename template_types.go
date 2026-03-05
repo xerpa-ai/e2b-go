@@ -53,7 +53,10 @@ const (
 type TemplateInfo struct {
 	// ID is the unique identifier of the template.
 	ID string `json:"templateID"`
+	// Names are the template names in namespace/alias format.
+	Names []string `json:"names,omitempty"`
 	// Aliases are the template aliases.
+	// Deprecated: Use Names instead.
 	Aliases []string `json:"aliases"`
 	// BuildID is the identifier of the last successful build.
 	BuildID string `json:"buildID"`
@@ -117,7 +120,10 @@ type TemplateBuild struct {
 type TemplateWithBuilds struct {
 	// ID is the unique identifier of the template.
 	ID string `json:"templateID"`
+	// Names are the template names in namespace/alias format.
+	Names []string `json:"names,omitempty"`
 	// Aliases are the template aliases.
+	// Deprecated: Use Names instead.
 	Aliases []string `json:"aliases"`
 	// Builds is the list of builds for this template.
 	Builds []TemplateBuild `json:"builds"`
